@@ -1,0 +1,141 @@
+{
+  "basic_settings": {
+    "name": "YCloud Customer Service",
+    "description": "Initiate conversations with customers and qualify their interest.  Briefly and clearly articulate the key benefit of the product or service in response to the customer's stated need. Persuade customers to provide their contact information during the conversation and thank customers when they provide it. Never hallucinate information.",
+    "background": "YCloud is a leading WhatsApp business service provider, dedicated to helping businesses grow their businesses by leveraging WhatsApp, the world's most popular social app!",
+    "language": "English",
+    "tone": "Friendly and professional",
+    "chatbot_id": "67adb3abaa26c063de0f4bd9"
+  },
+  "action_books": [
+    {
+      "condition": "1. Wants to schedule a demo 2. Requests detailed product/service information 3. Needs salesperson or account manager 4. Reveals purchase intention 5. Compares products between brands 6. Wants to sign up or get free trial 7. Asks for E-books or whitepapers 8. Inquires about pricing 9. Provide any contact information",
+      "action": "Persuade the customer to provide required information, then save the customer's information using the save_customer_information tool",
+      "tools": [
+        "save_customer_information"
+      ]
+    },
+    {
+      "condition": "The customer clearly expresses the intention to transfer to a human agent ",
+      "action": "Transfer to a human agent using the handoff_to tool and assign it to the team type and assignee is xyz.",
+      "tools": [
+        "handoff_to"
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "retrieve_knowledge",
+      "description": "Retrieve relevant information from the knowledge base",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      },
+      "endpoint": {
+        "url": "http://172.16.92.21:18080/chatbot/ai-inner/retrieve-knowledge",
+        "method": "GET",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "chatbotId": "{chatbotId}",
+          "tenantId": "{tenantId}",
+          "keywords": "{keywords}"
+        }
+      }
+    },
+    {
+      "name": "save_customer_information",
+      "description": "Save the customer's information when they provide one or more fields",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "nickName": {
+            "type": "string",
+            "description": "The name of the customer"
+          },
+          "email": {
+            "type": "string",
+            "description": "The email of the customer"
+          },
+          "dynamic_field_1": {
+            "type": "string",
+            "description": "The country of the customer",
+            "default": null
+          }
+        },
+        "required": ["email", "nickName"]
+      },
+      "endpoint": {
+        "url": "http://172.16.92.21:18080/contactsService/add",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "nickName": "{nickName}",
+          "phoneNumber": "todo_autofill_by_system",
+          "email": "{email}",
+          "customAttrs": [
+            {
+              "key": "dynamic_field_1",
+              "value": {
+                "dynamic_field_1": "{dynamic_field_1}"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "handoff_to",
+      "description": "Transfer the current conversation to a human agent or team for further assistance. This tool allows you to hand off the conversation when the customer requests human support or when the conversation requires human intervention. You can specify the assignee type (owner, agent, unassigned, team, or lastAssignee) and optionally provide an assignee ID.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "assigneeId": {
+            "type": "string",
+            "description": "The ID of the assignee. Required when type is 'agent' or 'team', optional for other types (owner, unassigned, lastAssignee)",
+            "default": null
+          },
+          "type": {
+            "type": "string",
+            "description": "The type of assignee to transfer the conversation to. Options include: owner (conversation owner), agent (specific agent), unassigned (no specific assignee), team (assign to a team), or lastAssignee (previous assignee)",
+            "examples": ["owner", "agent", "unassigned", "team", "lastAssignee"],
+            "default": "unassigned"
+          }
+        }
+      },
+      "endpoint": {
+        "url": "http://172.16.80.52:8080/inboxConversationService/handoff",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body":{
+          "assigneeId": "{assigneeId}",
+          "type": "{type}",
+          "dialogId": "todo_autofill_by_system"
+        }
+      }
+    },
+    {
+      "name": "close_conversation",
+      "description": "Close the current conversation by ending the dialog",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      },
+      "endpoint": {
+        "url": "http://www-dev.ycloud.com/inbox-api/inboxConversationService/close",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "dialogId": 31234341
+        }
+      }
+    }
+  ]
+}
