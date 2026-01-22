@@ -1,0 +1,78 @@
+# Docker Compose 配置示例
+version: '3.8'
+
+services:
+  # Workflow Agent 应用
+  workflow-agent:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      # LLM配置
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      DEFAULT_MODEL: gpt-4o
+
+      # 数据库配置
+      MONGODB_URI: mongodb://mongodb:27017
+      MONGODB_DB_NAME: workflow_agent
+      REDIS_URL: redis://redis:6379
+
+      # 应用配置
+      ENVIRONMENT: production
+      LOG_LEVEL: INFO
+      MAX_ITERATIONS: 5
+      ITERATION_STRATEGY: sop_driven
+
+    depends_on:
+      - mongodb
+      - redis
+    volumes:
+      - ./config:/app/config
+    networks:
+      - workflow-network
+
+  # MongoDB
+  mongodb:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: workflow_agent
+    networks:
+      - workflow-network
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - workflow-network
+
+  # PostgreSQL (可选)
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: workflow_agent
+      POSTGRES_USER: workflow
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - workflow-network
+
+volumes:
+  mongodb_data:
+  redis_data:
+  postgres_data:
+
+networks:
+  workflow-network:
+    driver: bridge

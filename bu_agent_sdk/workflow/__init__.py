@@ -1,38 +1,39 @@
 """
 Workflow module for agent SDK.
 
-This module provides fully dynamic, configuration-driven workflow orchestration:
+Based on workflow-agent-v9.md design.
 
 Key Features:
-- NO hardcoded tools - all loaded from configuration
-- Supports arbitrary tool configurations
-- LLM-visible: All tools in system_tools → HttpTool (via ConfigToolLoader)
-- LLM-invisible: flow_url → FlowExecutor (manual execution)
-- Skills: Conditions + tool name mappings
+- Configuration-driven workflow orchestration
+- SOP-driven multi-step execution
+- Hybrid intent matching (rule + LLM)
+- Multiple skill execution modes (agent + function)
+- Silent action optimization
+- KB parallel query optimization
 """
 
 from bu_agent_sdk.workflow.executors import (
     FlowExecutor,
-    SkillConfig,
-    SkillMatcher,
+    SkillExecutor,
     SystemExecutor,
-    WorkflowConfigSchema,
-    WorkflowOrchestrator,
-    get_tool_names_from_config,
-    load_workflow_config,
-    load_workflow_config_from_file,
-    validate_skill_tools,
+    TimerScheduler,
+    KBEnhancer,
+)
+from bu_agent_sdk.workflow.cache import (
+    PlanCache,
+    MemoryPlanCache,
+    CachedPlan,
+    compute_config_hash,
 )
 
 __all__ = [
     "FlowExecutor",
-    "SkillConfig",
-    "SkillMatcher",
+    "SkillExecutor",
     "SystemExecutor",
-    "WorkflowConfigSchema",
-    "WorkflowOrchestrator",
-    "get_tool_names_from_config",
-    "load_workflow_config",
-    "load_workflow_config_from_file",
-    "validate_skill_tools",
+    "TimerScheduler",
+    "KBEnhancer",
+    "PlanCache",
+    "MemoryPlanCache",
+    "CachedPlan",
+    "compute_config_hash",
 ]

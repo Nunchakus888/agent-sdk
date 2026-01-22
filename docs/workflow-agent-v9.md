@@ -1847,7 +1847,223 @@ class KBEnhancer:
 
 ---
 
-## 四、配置文件示例
+## 四、数据库存储
+
+### 4.1 存储接口
+
+WorkflowAgent 支持可插拔的存储后端，用于持久化会话状态、计划缓存和执行历史。
+
+```python
+# bu_agent_sdk/workflow/storage.py
+
+from typing import Protocol
+from bu_agent_sdk.agent.workflow_state import Session
+from bu_agent_sdk.workflow.cache import CachedPlan
+
+class SessionStore(Protocol):
+    """会话存储接口"""
+
+    async def get(self, session_id: str) -> Session | None:
+        """获取会话"""
+        ...
+
+    async def save(self, session: Session) -> None:
+        """保存会话"""
+        ...
+
+    async def delete(self, session_id: str) -> None:
+        """删除会话"""
+        ...
+
+    async def list_by_agent(self, agent_id: str, limit: int = 100) -> list[Session]:
+        """列出Agent的所有会话"""
+        ...
+```
+
+### 4.2 MongoDB 实现
+
+适用于文档型数据存储，支持灵活的Schema。
+
+```python
+from motor.motor_asyncio import AsyncIOMotorClient
+from bu_agent_sdk.workflow.storage import MongoDBSessionStore
+
+# 初始化
+client = AsyncIOMotorClient("mongodb://localhost:27017")
+session_store = MongoDBSessionStore(client, db_name="workflow_agent")
+
+# 使用
+agent = WorkflowAgent(
+    config=config,
+    llm=llm,
+    session_store=session_store
+)
+```
+
+**数据结构：**
+```javascript
+{
+  "session_id": "session_123",
+  "agent_id": "agent_456",
+  "workflow_state": {
+    "config_hash": "abc123",
+    "need_greeting": false,
+    "status": "active",
+    "metadata": {"key": "value"},
+    "last_updated": "2026-01-23T10:00:00"
+  },
+  "messages": [
+    {"role": "user", "content": "Hello"},
+    {"role": "assistant", "content": "Hi there"}
+  ],
+  "updated_at": "2026-01-23T10:00:00"
+}
+```
+
+### 4.3 PostgreSQL 实现
+
+适用于关系型数据存储，支持事务和复杂查询。
+
+```python
+import asyncpg
+from bu_agent_sdk.workflow.storage import PostgreSQLSessionStore
+
+# 初始化
+pool = await asyncpg.create_pool("postgresql://localhost/workflow_agent")
+session_store = PostgreSQLSessionStore(pool)
+
+# 初始化Schema
+await session_store.init_schema()
+
+# 使用
+agent = WorkflowAgent(
+    config=config,
+    llm=llm,
+    session_store=session_store
+)
+```
+
+**表结构：**
+```sql
+CREATE TABLE sessions (
+    session_id VARCHAR(255) PRIMARY KEY,
+    agent_id VARCHAR(255) NOT NULL,
+    config_hash VARCHAR(64),
+    need_greeting BOOLEAN DEFAULT TRUE,
+    status VARCHAR(50) DEFAULT 'ready',
+    metadata JSONB DEFAULT '{}',
+    messages JSONB DEFAULT '[]',
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX idx_sessions_agent_id ON sessions(agent_id);
+```
+
+### 4.4 Redis 计划缓存
+
+适用于高性能缓存，支持TTL自动过期。
+
+```python
+import redis.asyncio as redis
+from bu_agent_sdk.workflow.storage import RedisPlanCache
+
+# 初始化
+client = redis.from_url("redis://localhost")
+plan_cache = RedisPlanCache(client, ttl=3600)  # 1小时过期
+
+# 使用
+agent = WorkflowAgent(
+    config=config,
+    llm=llm,
+    plan_cache=plan_cache
+)
+```
+
+**缓存键格式：**
+```
+workflow:plan:{workflow_id}:{config_hash}
+```
+
+### 4.5 执行历史追踪
+
+用于分析和调试，记录每次执行的详细信息。
+
+```python
+from motor.motor_asyncio import AsyncIOMotorClient
+from bu_agent_sdk.workflow.storage import ExecutionHistoryStore
+
+# 初始化
+client = AsyncIOMotorClient("mongodb://localhost:27017")
+history_store = ExecutionHistoryStore(client)
+
+# 记录执行
+await history_store.log_execution(
+    session_id="session_123",
+    agent_id="agent_456",
+    user_message="Help me",
+    decision=decision_obj,
+    result="Success",
+    metadata={"duration": 1.5}
+)
+
+# 查询历史
+history = await history_store.get_session_history("session_123", limit=10)
+
+# 获取统计
+stats = await history_store.get_agent_stats("agent_456")
+# 返回: {"total_executions": 100, "avg_iterations": 2.5, "success_rate": 0.95}
+```
+
+### 4.6 存储选择建议
+
+| 存储类型 | 适用场景 | 优势 | 劣势 |
+|---------|---------|------|------|
+| **MongoDB** | 会话存储、执行历史 | 灵活Schema、易扩展 | 需要额外部署 |
+| **PostgreSQL** | 会话存储、需要事务 | 强一致性、复杂查询 | Schema固定 |
+| **Redis** | 计划缓存、临时数据 | 高性能、自动过期 | 数据易丢失 |
+| **内存** | 开发测试 | 零配置、快速 | 重启丢失 |
+
+**推荐组合：**
+- **生产环境**：PostgreSQL（会话） + Redis（缓存） + MongoDB（历史）
+- **开发环境**：内存存储（MemoryPlanCache）
+- **小型部署**：MongoDB（全部数据）
+
+### 4.7 自定义存储实现
+
+实现 `SessionStore` 或 `PlanCache` 协议即可：
+
+```python
+class CustomSessionStore:
+    """自定义存储实现"""
+
+    async def get(self, session_id: str) -> Session | None:
+        # 实现获取逻辑
+        pass
+
+    async def save(self, session: Session) -> None:
+        # 实现保存逻辑
+        pass
+
+    async def delete(self, session_id: str) -> None:
+        # 实现删除逻辑
+        pass
+
+    async def list_by_agent(self, agent_id: str, limit: int = 100) -> list[Session]:
+        # 实现列表逻辑
+        pass
+
+# 使用
+agent = WorkflowAgent(
+    config=config,
+    llm=llm,
+    session_store=CustomSessionStore()
+)
+```
+
+---
+
+## 五、配置文件示例
 
 ```json
 {
@@ -2398,10 +2614,21 @@ class SystemExecutor:
 
 ---
 
-**文档版本：** v9.2
-**最后更新：** 2026-01-22
+**文档版本：** v9.3
+**最后更新：** 2026-01-23
 **作者：** Claude (Sonnet 4.5)
 **基于：** BU Agent SDK + v8.md 整合优化
+
+**v9.3 更新内容：**
+- ✅ **数据库存储支持**：添加完整的数据库存储实现
+  - MongoDBSessionStore：文档型会话存储
+  - PostgreSQLSessionStore：关系型会话存储
+  - RedisPlanCache：高性能计划缓存
+  - ExecutionHistoryStore：执行历史追踪
+- ✅ 可插拔存储接口（SessionStore、PlanCache协议）
+- ✅ 存储选择建议和推荐组合
+- ✅ 自定义存储实现指南
+- ✅ 完整的单元测试覆盖（test_workflow_storage.py）
 
 **v9.2 更新内容（重大更新）：**
 - ✅ 引入 SOP 驱动的轻量级迭代机制
