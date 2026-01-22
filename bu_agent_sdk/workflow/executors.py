@@ -1,645 +1,491 @@
 """
 Workflow executors for handling different types of actions.
 
-Design Philosophy:
-- Fully configuration-driven (no hardcoded tools)
-- LLM-visible actions (Skills, Tools) → Use existing Tool module
-- LLM-invisible actions (Flow, System) → Manual HTTP implementation
-- Silent actions → Return None to exit iteration
+Based on workflow-agent-v9.md design.
 
-This module provides:
-1. Dynamic tool loading from configuration
-2. FlowExecutor - For fixed business process APIs (manual HTTP)
-3. SystemExecutor - For system actions (manual HTTP, supports silent mode)
-4. SkillMatcher - For complex intent matching
-5. WorkflowOrchestrator - Unified orchestration
+Design Philosophy:
+- SkillExecutor: Agent mode (sub-agent) + Function mode (HTTP call)
+- FlowExecutor: Direct API call, black box service
+- SystemExecutor: System actions with silent mode support
+- TimerScheduler: Asyncio-based timer scheduling
+- KBEnhancer: KB parallel query optimization
 """
 
+import asyncio
 import json
-import re
-from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
-from bu_agent_sdk.llm.base import ToolDefinition
-from bu_agent_sdk.tools.decorator import Tool, ToolContent
-from bu_agent_sdk.tools.config_loader import (
-    ConfigToolLoader,
-    AgentConfigSchema,
-    HttpTool,
-    ToolConfig,
+from bu_agent_sdk import Agent
+from bu_agent_sdk.agent import TaskComplete
+from bu_agent_sdk.tools import tool
+from bu_agent_sdk.llm.base import BaseChatModel
+from bu_agent_sdk.tools.action_books import (
+    SkillDefinition,
+    FlowDefinition,
+    SystemAction,
+    TimerConfig,
+    WorkflowConfigSchema,
 )
 
 
 # =============================================================================
-# Configuration Schema for Workflow (extends existing schema)
+# Skill Executor
 # =============================================================================
 
 
-class SkillConfig(BaseModel):
+class SkillExecutor:
     """
-    Skill configuration from sop.json.
+    Skill executor - supports multiple execution modes.
 
-    Example from sop.json:
-    {
-      "condition": "Customer wants to schedule a demo...",
-      "action": "Persuade customer to provide info...",
-      "tools": ["save_customer_information"]
-    }
+    Modes:
+    1. Agent mode - Create sub-agent, supports multi-turn dialogue
+    2. Function mode - Direct HTTP call to external service (single I/O)
     """
 
-    condition: str = Field(description="Condition that triggers this skill")
-    action: str = Field(description="Action to take when condition is met")
-    tools: list[str] = Field(
-        default_factory=list,
-        description="Tool names available for this skill"
-    )
+    def __init__(self, config: WorkflowConfigSchema, llm: BaseChatModel):
+        self.config = config
+        self.llm = llm
+        self._skill_agents: dict[str, Agent] = {}
+        self._http_client: httpx.AsyncClient | None = None
 
+    async def execute(
+        self,
+        skill_id: str,
+        user_request: str,
+        parameters: dict,
+    ) -> str:
+        """Execute skill."""
 
-class WorkflowConfigSchema(BaseModel):
-    """
-    Complete workflow configuration schema matching sop.json structure.
+        # Find skill definition
+        skill = next(
+            (s for s in self.config.skills if s.skill_id == skill_id),
+            None
+        )
+        if not skill:
+            return f"❌ Skill not found: {skill_id}"
 
-    This schema is fully dynamic - all tools are loaded from configuration,
-    no hardcoding required.
-    """
+        # Dispatch by execution mode
+        if skill.execution_mode == "agent":
+            return await self._execute_agent_mode(skill, user_request, parameters)
+        elif skill.execution_mode == "function":
+            return await self._execute_function_mode(skill, user_request, parameters)
+        else:
+            return f"❌ Unknown execution mode: {skill.execution_mode}"
 
-    # Basic settings
-    basic_settings: dict[str, Any] = Field(
-        default_factory=dict,
-        description="Agent basic settings (name, description, etc.)"
-    )
+    async def _execute_agent_mode(
+        self,
+        skill: SkillDefinition,
+        user_request: str,
+        parameters: dict,
+    ) -> str:
+        """Agent mode - create sub-agent execution."""
 
-    # Flow URL - single endpoint for flow API (optional)
-    flow_url: str | None = Field(
-        default=None,
-        description="Flow API endpoint URL (if configured)"
-    )
+        if not skill.system_prompt:
+            return f"❌ Agent mode missing system_prompt config"
 
-    # Knowledge retrieval URL - single endpoint for KB (optional)
-    retrieve_knowledge_url: str | None = Field(
-        default=None,
-        description="Knowledge retrieval API endpoint URL (if configured)"
-    )
+        # Get or create sub-agent
+        agent = self._get_or_create_agent(skill)
 
-    # Skills - complex intents with conditions
-    skills: list[SkillConfig] = Field(
-        default_factory=list,
-        description="Skill definitions with conditions and tool mappings"
-    )
+        # Execute
+        try:
+            result = await agent.query(user_request)
+            return f"✅ [{skill.name}] Completed\n\n{result}"
+        except TaskComplete as e:
+            return f"✅ [{skill.name}] Completed\n\n{e.message}"
+        except Exception as e:
+            return f"❌ [{skill.name}] Execution failed: {e}"
 
-    # System tools - all tools are loaded dynamically from this array
-    system_tools: list[dict[str, Any]] = Field(
-        default_factory=list,
-        description="Tool definitions (dynamically loaded, no hardcoding)"
-    )
+    async def _execute_function_mode(
+        self,
+        skill: SkillDefinition,
+        user_request: str,
+        parameters: dict,
+    ) -> str:
+        """Function mode - direct HTTP call."""
+
+        if not skill.endpoint:
+            return f"❌ Function mode missing endpoint config"
+
+        try:
+            # Prepare request
+            endpoint = skill.endpoint
+            url = endpoint.get("url", "")
+            method = endpoint.get("method", "POST")
+            headers = endpoint.get("headers", {"Content-Type": "application/json"})
+
+            # Prepare request body (parameter substitution)
+            body_template = endpoint.get("body", {})
+            body = self._substitute_parameters(
+                body_template,
+                {"input": user_request, **parameters}
+            )
+
+            # Send HTTP request
+            if not self._http_client:
+                self._http_client = httpx.AsyncClient(timeout=30.0)
+
+            response = await self._http_client.request(
+                method=method,
+                url=url,
+                headers=headers,
+                json=body,
+            )
+
+            # Parse response
+            if response.is_success:
+                result = self._parse_response(response, skill.output_parser or "text")
+                return f"✅ [{skill.name}] Completed\n\n{result}"
+            else:
+                return f"❌ [{skill.name}] Call failed: HTTP {response.status_code}"
+
+        except Exception as e:
+            return f"❌ [{skill.name}] Execution failed: {e}"
+
+    def _get_or_create_agent(self, skill: SkillDefinition) -> Agent:
+        """Get or create skill agent (cached reuse)."""
+
+        if skill.skill_id in self._skill_agents:
+            return self._skill_agents[skill.skill_id]
+
+        # Create done tool
+        @tool("Mark task as complete")
+        async def done(message: str) -> str:
+            raise TaskComplete(message)
+
+        # TODO: Load skill's tool list
+        skill_tools = [done]
+
+        # Create agent
+        agent = Agent(
+            llm=self.llm,
+            tools=skill_tools,
+            system_prompt=skill.system_prompt or "",
+            max_iterations=skill.max_iterations,
+            require_done_tool=skill.require_done_tool,
+        )
+
+        self._skill_agents[skill.skill_id] = agent
+        return agent
+
+    def _substitute_parameters(self, template: Any, params: dict) -> Any:
+        """Substitute parameter placeholders."""
+        if isinstance(template, str):
+            # Replace {param_name} placeholders
+            for key, value in params.items():
+                template = template.replace(f"{{{key}}}", str(value))
+            return template
+        elif isinstance(template, dict):
+            return {k: self._substitute_parameters(v, params) for k, v in template.items()}
+        elif isinstance(template, list):
+            return [self._substitute_parameters(item, params) for item in template]
+        else:
+            return template
+
+    def _parse_response(self, response: Any, parser: str) -> str:
+        """Parse response."""
+        if parser == "json":
+            try:
+                data = response.json()
+                return json.dumps(data, ensure_ascii=False, indent=2)
+            except Exception:
+                return response.text
+        else:
+            return response.text
 
 
 # =============================================================================
-# Flow Executor (Manual HTTP Implementation)
+# Flow Executor
 # =============================================================================
 
 
 class FlowExecutor:
     """
-    Flow executor for flow_url endpoint.
+    Flow executor - direct API call, don't care about internal logic.
 
-    Design:
-    - NOT registered as Tool (LLM-invisible)
-    - Single endpoint for all flow operations
-    - Triggered by pattern matching or explicit routing
-    - Direct HTTP calls without Tool abstraction
+    Design philosophy:
+    - Flow is a black box service, only care about input and output
+    - Don't maintain state machine, don't manage steps
+    - Suitable for existing business process APIs
     """
 
-    def __init__(
-        self,
-        flow_url: str | None,
-        http_client: httpx.AsyncClient | None = None,
-        context_vars: dict[str, Any] | None = None,
-    ):
-        self.flow_url = flow_url
-        self.http_client = http_client
-        self.context_vars = context_vars or {}
+    def __init__(self, config: WorkflowConfigSchema):
+        self.config = config
+        self._http_client: httpx.AsyncClient | None = None
 
     async def execute(
         self,
+        flow_id: str,
         user_message: str,
-        parameters: dict[str, Any] | None = None,
-    ) -> str | None:
-        """
-        Execute flow API call.
+        parameters: dict,
+        session: Any,
+    ) -> str:
+        """Execute flow."""
 
-        Args:
-            user_message: User's message
-            parameters: Additional parameters
-
-        Returns:
-            str: Response content
-            None: If flow_url not configured
-        """
-        if not self.flow_url:
-            return None
+        flow = self._get_flow(flow_id)
+        if not flow:
+            return f"❌ Flow not found: {flow_id}"
 
         try:
+            # Prepare request
+            endpoint = flow.endpoint
+            url = endpoint.get("url", "")
+            method = endpoint.get("method", "POST")
+            headers = endpoint.get("headers", {"Content-Type": "application/json"})
+
             # Build request body
-            params = {
-                "message": user_message,
-                **(parameters or {}),
-                **self.context_vars,
-            }
+            body_template = endpoint.get("body", {})
+            body = self._substitute_parameters(
+                body_template,
+                {
+                    "user_message": user_message,
+                    "session_id": session.session_id,
+                    **parameters,
+                }
+            )
 
             # Send request
-            client = self.http_client or httpx.AsyncClient()
-            should_close = self.http_client is None
+            if not self._http_client:
+                self._http_client = httpx.AsyncClient(timeout=30.0)
 
-            try:
-                response = await client.request(
-                    method="POST",
-                    url=self.flow_url,
-                    headers={"Content-Type": "application/json"},
-                    json=params,
-                    timeout=30.0,
-                )
+            response = await self._http_client.request(
+                method=method,
+                url=url,
+                headers=headers,
+                json=body,
+            )
 
-                # Handle response
-                if response.is_success:
-                    try:
-                        data = response.json()
-                        return json.dumps(data, ensure_ascii=False, indent=2)
-                    except Exception:
-                        return response.text
+            # Handle response
+            if response.is_success:
+                result_text = self._parse_response(response)
+
+                # Use response template (if configured)
+                if flow.response_template:
+                    return flow.response_template.replace("{result}", result_text)
                 else:
-                    return f"❌ Flow API failed: HTTP {response.status_code}"
-
-            finally:
-                if should_close:
-                    await client.aclose()
+                    return f"✅ [{flow.name}] Execution completed\n\n{result_text}"
+            else:
+                return f"❌ [{flow.name}] Execution failed: HTTP {response.status_code}\n{response.text}"
 
         except Exception as e:
-            return f"❌ Flow API error: {e}"
+            return f"❌ [{flow.name}] Execution failed: {e}"
+
+    def _get_flow(self, flow_id: str) -> FlowDefinition | None:
+        """Find flow definition."""
+        return next(
+            (f for f in self.config.flows if f.flow_id == flow_id),
+            None
+        )
+
+    def _substitute_parameters(self, template: Any, params: dict) -> Any:
+        """Substitute parameter placeholders."""
+        if isinstance(template, str):
+            for key, value in params.items():
+                template = template.replace(f"{{{key}}}", str(value))
+            return template
+        elif isinstance(template, dict):
+            return {k: self._substitute_parameters(v, params) for k, v in template.items()}
+        elif isinstance(template, list):
+            return [self._substitute_parameters(item, params) for item in template]
+        else:
+            return template
+
+    def _parse_response(self, response: Any) -> str:
+        """Parse response."""
+        try:
+            data = response.json()
+            return json.dumps(data, ensure_ascii=False, indent=2)
+        except Exception:
+            return response.text
 
 
 # =============================================================================
-# System Executor (Manual HTTP Implementation)
+# System Executor
 # =============================================================================
 
 
 class SystemExecutor:
     """
-    System action executor for special operations.
+    System action executor.
 
-    Design:
-    - NOT registered as Tool (LLM-invisible)
-    - Handles special system operations that may need silent mode
-    - Can be extended for custom handlers
+    Handles: handoff, close conversation, update info, etc.
     """
 
-    def __init__(
-        self,
-        http_client: httpx.AsyncClient | None = None,
-        context_vars: dict[str, Any] | None = None,
-    ):
-        self.http_client = http_client
-        self.context_vars = context_vars or {}
+    def __init__(self, config: WorkflowConfigSchema):
+        self.config = config
 
-    async def execute(
-        self,
-        action_type: str,
-        endpoint_url: str,
-        parameters: dict[str, Any] | None = None,
-        silent: bool = False,
-    ) -> str | None:
-        """
-        Execute a system action.
+    async def execute(self, action_id: str, parameters: dict) -> str | None:
+        """Execute system action."""
 
-        Args:
-            action_type: Type of action (handoff, close, update_profile, etc.)
-            endpoint_url: API endpoint URL
-            parameters: Action parameters
-            silent: If True, returns None (silent execution)
-
-        Returns:
-            str: Response content (non-silent)
-            None: Silent execution
-        """
-        try:
-            # Build request body
-            params = {
-                **(parameters or {}),
-                **self.context_vars,
-            }
-
-            # Send request
-            client = self.http_client or httpx.AsyncClient()
-            should_close = self.http_client is None
-
-            try:
-                response = await client.request(
-                    method="POST",
-                    url=endpoint_url,
-                    headers={"Content-Type": "application/json"},
-                    json=params,
-                    timeout=30.0,
-                )
-
-                # Silent mode: return None regardless of result
-                if silent:
-                    return None
-
-                # Non-silent: return response
-                if response.is_success:
-                    try:
-                        data = response.json()
-                        return json.dumps(data, ensure_ascii=False, indent=2)
-                    except Exception:
-                        return response.text
-                else:
-                    return f"❌ System action failed: HTTP {response.status_code}"
-
-            finally:
-                if should_close:
-                    await client.aclose()
-
-        except Exception as e:
-            if silent:
-                return None
-            return f"❌ System action error: {e}"
-
-
-# =============================================================================
-# Skill Matcher (Intent Matching)
-# =============================================================================
-
-
-class SkillMatcher:
-    """
-    Skill condition matcher for complex intent detection.
-
-    Extracts conditions from skills configuration and provides
-    matching capabilities for intent routing.
-    """
-
-    def __init__(self, skills: list[SkillConfig]):
-        self.skills = skills
-
-    def get_all_conditions(self) -> list[str]:
-        """Get all skill conditions for LLM context."""
-        return [skill.condition for skill in self.skills]
-
-    def get_skill_by_condition(self, condition: str) -> SkillConfig | None:
-        """Get skill configuration by condition."""
-        return next(
-            (s for s in self.skills if s.condition == condition),
+        action = next(
+            (a for a in self.config.system_actions if a.action_id == action_id),
             None
         )
+        if not action:
+            return f"❌ System action not found: {action_id}"
 
-    def get_tools_for_condition(self, condition: str) -> list[str]:
-        """Get tool names for a specific skill condition."""
-        skill = self.get_skill_by_condition(condition)
-        return skill.tools if skill else []
+        # Execute by handler type
+        if action.handler == "handoff":
+            result = await self._handoff(action, parameters)
+        elif action.handler == "close":
+            result = await self._close_conversation(action, parameters)
+        elif action.handler == "update_profile":
+            result = await self._update_profile(action, parameters)
+        else:
+            return f"❌ Unknown system action type: {action.handler}"
 
-    def build_skill_prompt(self) -> str:
-        """Build a prompt section describing all skills."""
-        if not self.skills:
+        # Silent mode: return None
+        if action.silent:
+            return None
+
+        # Non-silent: return response
+        return result
+
+    async def _handoff(self, action: SystemAction, parameters: dict) -> str:
+        """Handoff to human."""
+        response = action.response_template or "Transferring to human service..."
+        # TODO: Actual handoff logic
+        return response
+
+    async def _close_conversation(self, action: SystemAction, parameters: dict) -> str:
+        """Close conversation."""
+        return "Conversation closed, thank you!"
+
+    async def _update_profile(self, action: SystemAction, parameters: dict) -> str:
+        """Update user info."""
+        # TODO: Actual update logic
+        return "Information updated"
+
+
+# =============================================================================
+# Timer Scheduler
+# =============================================================================
+
+
+class TimerScheduler:
+    """
+    Timer scheduler - based on asyncio.
+
+    Features:
+    - Manage session-level timer tasks
+    - Auto-trigger Action on expiration
+    - Support cancel and reschedule
+    """
+
+    def __init__(self, workflow_agent: Any):
+        self.workflow_agent = workflow_agent
+        self._tasks: dict[str, asyncio.Task] = {}
+
+    async def schedule(self, session_id: str, timers: list[TimerConfig]) -> None:
+        """Register timers for session."""
+        # Cancel existing timers
+        await self.cancel_session_timers(session_id)
+
+        # Register new timers
+        for timer in timers:
+            task_key = f"{session_id}:{timer.timer_id}"
+            task = asyncio.create_task(
+                self._delayed_trigger(session_id, timer)
+            )
+            self._tasks[task_key] = task
+
+    async def _delayed_trigger(self, session_id: str, timer: TimerConfig) -> None:
+        """Delayed trigger timer."""
+        try:
+            await asyncio.sleep(timer.delay_seconds)
+
+            # Trigger Action
+            await self.workflow_agent.query(
+                message=timer.message or f"[Timer:{timer.timer_id}]",
+                session_id=session_id
+            )
+        except asyncio.CancelledError:
+            # Timer cancelled
+            pass
+        except Exception as e:
+            print(f"⚠️  Timer execution failed: {e}")
+
+    async def cancel_session_timers(self, session_id: str) -> None:
+        """Cancel all timers for session."""
+        keys_to_remove = [k for k in self._tasks if k.startswith(f"{session_id}:")]
+        for key in keys_to_remove:
+            task = self._tasks.pop(key)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+
+# =============================================================================
+# KB Enhancer
+# =============================================================================
+
+
+class KBEnhancer:
+    """
+    Knowledge base enhancer.
+
+    Features:
+    - Parallel pre-query KB (non-blocking main flow)
+    - Cache query results, use directly when needed
+    - Improve answer accuracy, shorten response time
+    """
+
+    def __init__(self, config: WorkflowConfigSchema, kb_tool: Any | None = None):
+        self.config = config
+        self.kb_tool = kb_tool
+        self.enabled = False
+
+        if config.kb_config:
+            self.enabled = config.kb_config.get("enabled", False)
+            self.auto_enhance = config.kb_config.get("auto_enhance", True)
+            self.enhance_conditions = config.kb_config.get("enhance_conditions", [])
+
+    async def query_kb(self, user_message: str) -> str:
+        """
+        Parallel query KB.
+
+        Optimization: Called at iteration start, doesn't block LLM decision.
+        """
+        if not self.enabled or not self.kb_tool:
             return ""
 
-        parts = ["## Skills (Complex Intents)", ""]
+        try:
+            kb_result = await self.kb_tool.execute(query=user_message)
+            return kb_result
+        except Exception as e:
+            # KB query failed, return empty result
+            print(f"⚠️  KB query failed: {e}")
+            return ""
 
-        for i, skill in enumerate(self.skills, 1):
-            parts.append(f"### Skill {i}")
-            parts.append(f"**Condition:** {skill.condition}")
-            parts.append(f"**Action:** {skill.action}")
-            if skill.tools:
-                parts.append(f"**Available Tools:** {', '.join(skill.tools)}")
-            parts.append("")
-
-        return "\n".join(parts)
-
-
-# =============================================================================
-# Workflow Orchestrator (Fully Dynamic)
-# =============================================================================
-
-
-class WorkflowOrchestrator:
-    """
-    Workflow orchestrator with fully dynamic tool loading.
-
-    Key Features:
-    - NO hardcoded tools - all loaded from configuration
-    - Supports arbitrary tool configurations
-    - Automatically handles flow_url and retrieve_knowledge_url
-    - Skills are mapped to existing tools via tool names
-
-    Design:
-    - LLM-visible: All tools in system_tools → HttpTool (via ConfigToolLoader)
-    - LLM-invisible: flow_url → FlowExecutor (manual)
-    - Skills: Conditions + tool name mappings (no separate registration)
-    """
-
-    def __init__(
-        self,
-        config: WorkflowConfigSchema,
-        context_vars: dict[str, Any] | None = None,
-        http_client: httpx.AsyncClient | None = None,
-    ):
-        self.config = config
-        self.context_vars = context_vars or {}
-        self.http_client = http_client or httpx.AsyncClient(timeout=30.0)
-
-        # Manual executors (LLM-invisible)
-        self.flow_executor = FlowExecutor(
-            config.flow_url,
-            self.http_client,
-            self.context_vars
-        )
-        self.system_executor = SystemExecutor(
-            self.http_client,
-            self.context_vars
-        )
-
-        # Skill matcher
-        self.skill_matcher = SkillMatcher(config.skills)
-
-        # Tool loader (dynamic)
-        self._tool_loader = self._create_tool_loader()
-
-    def _create_tool_loader(self) -> ConfigToolLoader:
-        """
-        Create ConfigToolLoader from workflow configuration.
-
-        This dynamically loads ALL tools from system_tools array,
-        including retrieve_knowledge if configured.
-        """
-        # Build tools list
-        tools = []
-
-        # 1. Add all system_tools (dynamically)
-        tools.extend(self.config.system_tools)
-
-        # 2. Add retrieve_knowledge if URL is configured
-        if self.config.retrieve_knowledge_url:
-            # Check if retrieve_knowledge already exists in system_tools
-            has_retrieve_knowledge = any(
-                tool.get("name") == "retrieve_knowledge"
-                for tool in self.config.system_tools
-            )
-
-            if not has_retrieve_knowledge:
-                # Add retrieve_knowledge tool dynamically
-                tools.append({
-                    "name": "retrieve_knowledge",
-                    "description": "Retrieve relevant information from the knowledge base",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "keywords": {
-                                "type": "string",
-                                "description": "Keywords to search in knowledge base"
-                            }
-                        },
-                        "required": ["keywords"]
-                    },
-                    "endpoint": {
-                        "url": self.config.retrieve_knowledge_url,
-                        "method": "GET",
-                        "headers": {"Content-Type": "application/json"},
-                        "body": {
-                            "chatbotId": "{chatbotId}",
-                            "tenantId": "{tenantId}",
-                            "keywords": "{keywords}"
-                        }
-                    }
-                })
-
-        # Create AgentConfigSchema for ConfigToolLoader
-        agent_config = AgentConfigSchema(
-            basic_settings=self.config.basic_settings,
-            tools=[ToolConfig.model_validate(tool) for tool in tools]
-        )
-
-        return ConfigToolLoader(agent_config)
-
-    def get_tools(self) -> list[HttpTool]:
-        """
-        Get all LLM-visible tools (dynamically loaded from configuration).
-
-        Returns:
-            List of HttpTool instances
-        """
-        return self._tool_loader.get_tools(
-            context_vars=self.context_vars,
-            http_client=self.http_client
-        )
-
-    def get_tool_by_name(self, tool_name: str) -> HttpTool | None:
-        """
-        Get a specific tool by name.
-
-        Args:
-            tool_name: Name of the tool
-
-        Returns:
-            HttpTool instance or None if not found
-        """
-        tools = self.get_tools()
-        return next((t for t in tools if t.name == tool_name), None)
-
-    def build_system_prompt(self, include_skills: bool = True) -> str:
-        """
-        Build complete system prompt with workflow instructions.
-
-        Args:
-            include_skills: Whether to include skill descriptions
-
-        Returns:
-            Formatted system prompt
-        """
-        parts = []
-
-        # Basic settings
-        basic = self.config.basic_settings
-        if basic:
-            if basic.get("name"):
-                parts.append(f"# {basic['name']}")
-                parts.append("")
-            if basic.get("description"):
-                parts.append(basic["description"])
-                parts.append("")
-            if basic.get("background"):
-                parts.append("## Background")
-                parts.append(basic["background"])
-                parts.append("")
-
-        # Skills (if enabled)
-        if include_skills:
-            skill_prompt = self.skill_matcher.build_skill_prompt()
-            if skill_prompt:
-                parts.append(skill_prompt)
-
-        # Communication guidelines
-        if basic.get("language") or basic.get("tone"):
-            parts.append("## Communication Guidelines")
-            if basic.get("language"):
-                parts.append(f"- Language: {basic['language']}")
-            if basic.get("tone"):
-                parts.append(f"- Tone: {basic['tone']}")
-            parts.append("")
-
-        return "\n".join(parts)
-
-    async def execute_flow(
+    async def enhance(
         self,
         user_message: str,
-        parameters: dict[str, Any] | None = None,
-    ) -> str | None:
-        """
-        Execute flow API (LLM-invisible).
-
-        Args:
-            user_message: User's message
-            parameters: Additional parameters
-
-        Returns:
-            str: Response content
-            None: If flow_url not configured
-        """
-        return await self.flow_executor.execute(user_message, parameters)
-
-    async def execute_system_action(
-        self,
         action_type: str,
-        endpoint_url: str,
-        parameters: dict[str, Any] | None = None,
-        silent: bool = False,
-    ) -> str | None:
-        """
-        Execute system action (LLM-invisible).
+        execution_result: str
+    ) -> str:
+        """Enhance execution result (backward compatible method)."""
+        if not self.enabled or not self.kb_tool:
+            return execution_result
 
-        Args:
-            action_type: Type of action
-            endpoint_url: API endpoint URL
-            parameters: Action parameters
-            silent: If True, returns None
+        # Check if enhancement needed
+        if not self.auto_enhance:
+            return execution_result
 
-        Returns:
-            str: Response content (non-silent)
-            None: Silent execution
-        """
-        return await self.system_executor.execute(
-            action_type,
-            endpoint_url,
-            parameters,
-            silent
-        )
+        if self.enhance_conditions and action_type not in self.enhance_conditions:
+            return execution_result
 
-    def get_skill_tools(self, condition: str) -> list[HttpTool]:
-        """
-        Get tools for a specific skill condition.
+        # Query KB
+        try:
+            kb_result = await self.kb_tool.execute(query=user_message)
 
-        Args:
-            condition: Skill condition
-
-        Returns:
-            List of HttpTool instances for this skill
-        """
-        tool_names = self.skill_matcher.get_tools_for_condition(condition)
-        all_tools = self.get_tools()
-
-        return [
-            tool for tool in all_tools
-            if tool.name in tool_names
-        ]
-
-
-# =============================================================================
-# Configuration Loaders
-# =============================================================================
-
-
-def load_workflow_config(config_dict: dict[str, Any]) -> WorkflowConfigSchema:
-    """
-    Load workflow configuration from dictionary.
-
-    Args:
-        config_dict: Configuration dictionary (e.g., from sop.json)
-
-    Returns:
-        WorkflowConfigSchema instance
-    """
-    return WorkflowConfigSchema.model_validate(config_dict)
-
-
-def load_workflow_config_from_file(file_path: str) -> WorkflowConfigSchema:
-    """
-    Load workflow configuration from JSON file.
-
-    Args:
-        file_path: Path to JSON configuration file (e.g., sop.json)
-
-    Returns:
-        WorkflowConfigSchema instance
-    """
-    with open(file_path, encoding="utf-8") as f:
-        config_dict = json.load(f)
-    return load_workflow_config(config_dict)
-
-
-# =============================================================================
-# Helper Functions
-# =============================================================================
-
-
-def get_tool_names_from_config(config: WorkflowConfigSchema) -> list[str]:
-    """
-    Get all tool names from configuration.
-
-    Args:
-        config: Workflow configuration
-
-    Returns:
-        List of tool names
-    """
-    tool_names = []
-
-    # From system_tools
-    for tool in config.system_tools:
-        if "name" in tool:
-            tool_names.append(tool["name"])
-
-    # Add retrieve_knowledge if configured
-    if config.retrieve_knowledge_url:
-        has_retrieve_knowledge = any(
-            tool.get("name") == "retrieve_knowledge"
-            for tool in config.system_tools
-        )
-        if not has_retrieve_knowledge:
-            tool_names.append("retrieve_knowledge")
-
-    return tool_names
-
-
-def validate_skill_tools(config: WorkflowConfigSchema) -> dict[str, list[str]]:
-    """
-    Validate that all tools referenced in skills exist in configuration.
-
-    Args:
-        config: Workflow configuration
-
-    Returns:
-        Dict mapping skill conditions to missing tool names
-    """
-    available_tools = set(get_tool_names_from_config(config))
-    missing_tools = {}
-
-    for skill in config.skills:
-        missing = [
-            tool_name for tool_name in skill.tools
-            if tool_name not in available_tools
-        ]
-        if missing:
-            missing_tools[skill.condition] = missing
-
-    return missing_tools
+            # Merge results
+            enhanced = f"{execution_result}\n\n📚 Related knowledge:\n{kb_result}"
+            return enhanced
+        except Exception as e:
+            # KB query failed, return original result
+            print(f"⚠️  KB enhancement failed: {e}")
+            return execution_result
