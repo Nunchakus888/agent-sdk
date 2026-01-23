@@ -5,6 +5,7 @@ FastAPI Web API for Workflow Agent
 """
 
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -13,7 +14,7 @@ from fastapi.responses import JSONResponse
 
 from api import __version__
 from api.routes import router
-from api.dependencies import initialize_agent
+from api.dependencies import initialize_agent_manager, shutdown_agent_manager
 
 # =============================================================================
 # 日志配置
@@ -38,25 +39,42 @@ async def lifespan(app: FastAPI):
     """
     应用生命周期管理
 
-    启动时：初始化 WorkflowAgent
+    启动时：初始化 AgentManager
     关闭时：清理资源
     """
     # 启动
     logger.info("Starting Workflow Agent API...")
 
     try:
-        # 初始化 WorkflowAgent
-        agent = await initialize_agent()
-        logger.info(f"WorkflowAgent initialized successfully - config_hash: {agent.config_hash}")
+        # 从环境变量读取配置
+        config_dir = os.getenv("CONFIG_DIR", "config")
+        idle_timeout = int(os.getenv("AGENT_IDLE_TIMEOUT", "300"))  # 5分钟
+        cleanup_interval = int(os.getenv("AGENT_CLEANUP_INTERVAL", "60"))  # 1分钟
+
+        # 初始化 AgentManager
+        manager = await initialize_agent_manager(
+            config_dir=config_dir,
+            idle_timeout=idle_timeout,
+            cleanup_interval=cleanup_interval,
+        )
+
+        logger.info(
+            f"AgentManager initialized successfully - "
+            f"config_dir: {config_dir}, "
+            f"idle_timeout: {idle_timeout}s, "
+            f"cleanup_interval: {cleanup_interval}s"
+        )
 
     except Exception as e:
-        logger.error(f"Failed to initialize WorkflowAgent: {e}", exc_info=True)
+        logger.error(f"Failed to initialize AgentManager: {e}", exc_info=True)
         raise
 
     yield
 
     # 关闭
     logger.info("Shutting down Workflow Agent API...")
+    await shutdown_agent_manager()
+    logger.info("AgentManager shutdown complete")
 
 
 # =============================================================================
@@ -65,7 +83,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Workflow Agent API",
-    description="RESTful API for BU Agent SDK Workflow Agent",
+    description="RESTful API for BU Agent SDK Workflow Agent (Multi-tenant, Session-based)",
     version=__version__,
     lifespan=lifespan,
     docs_url="/docs",
@@ -96,6 +114,7 @@ app.add_middleware(
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
     """全局异常处理"""
+    _ = request  # 避免未使用警告
     logger.error(f"Unhandled exception: {exc}", exc_info=True)
     return JSONResponse(
         status_code=500,
@@ -122,6 +141,7 @@ async def root():
     return {
         "name": "Workflow Agent API",
         "version": __version__,
+        "description": "Multi-tenant, Session-based Workflow Agent API",
         "docs": "/docs",
         "health": "/api/v1/health",
     }
