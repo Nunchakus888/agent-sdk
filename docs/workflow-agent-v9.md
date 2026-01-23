@@ -2552,16 +2552,23 @@ Workflow Agent 提供完整的 FastAPI Web API 实现，支持：
 
 #### 6.4.1 本地运行
 
-```bash
-# 1. 安装依赖
-pip install -r requirements.txt
-pip install -r api/requirements.txt
+推荐使用 `uv` 进行包管理（更快、更可靠）：
 
-# 2. 配置环境变量
+```bash
+# 1. 安装 uv（如果还没有安装）
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# 2. 安装依赖（包括 API 依赖）
+uv pip install -e ".[api]"
+
+# 或使用传统 pip
+pip install -e ".[api]"
+
+# 3. 配置环境变量
 cp .env.example .env
 # 编辑 .env 文件，填写 OPENAI_API_KEY 等
 
-# 3. 启动服务
+# 4. 启动服务
 python -m api.main
 ```
 
@@ -2772,8 +2779,11 @@ docker inspect --format='{{.State.Health.Status}}' workflow-agent
 API 提供了完整的单元测试套件，覆盖所有端点和功能。
 
 ```bash
-# 安装测试依赖
-pip install pytest pytest-asyncio httpx
+# 安装测试依赖（使用 uv，推荐）
+uv pip install -e ".[test]"
+
+# 或使用传统 pip
+pip install -e ".[test]"
 
 # 运行所有 API 测试
 pytest tests/test_api.py -v

@@ -92,9 +92,17 @@
 
 ### 基本命令
 
+推荐使用 `uv` 进行包管理（更快、更可靠）：
+
 ```bash
+# 安装 uv（如果还没有安装）
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
 # 安装测试依赖
-pip install pytest pytest-asyncio httpx
+uv pip install -e ".[test]"
+
+# 或使用传统 pip
+pip install -e ".[test]"
 
 # 运行所有测试
 pytest tests/test_api.py -v
@@ -214,15 +222,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
+
       - name: Set up Python
         uses: actions/setup-python@v2
         with:
           python-version: '3.11'
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
-          pip install -r api/requirements.txt
-          pip install pytest pytest-asyncio httpx pytest-cov
+          uv pip install --system -e ".[api,test]"
+
       - name: Run tests
         run: pytest tests/test_api.py -v --cov=api
 ```

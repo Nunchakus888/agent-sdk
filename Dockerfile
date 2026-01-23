@@ -2,24 +2,23 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies and uv
 RUN apt-get update && apt-get install -y \
     gcc \
-    && rm -rf /var/lib/apt/lists/*
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Copy requirements
-COPY requirements.txt .
-COPY api/requirements.txt api/requirements.txt
+# Add uv to PATH
+ENV PATH="/root/.cargo/bin:$PATH"
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
-RUN pip install --no-cache-dir -r api/requirements.txt
-
-# Copy application code
+# Copy project files
+COPY pyproject.toml .
+COPY README.md .
 COPY . .
 
-# Install package in editable mode
-RUN pip install -e .
+# Install dependencies using uv (much faster than pip)
+RUN uv pip install --system -e ".[api]"
 
 # Expose port
 EXPOSE 8000
