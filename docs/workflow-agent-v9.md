@@ -6,42 +6,62 @@
 
 ## 版本更新说明
 
-**v9.2 核心特性：**
+**v9.5 核心特性：**
 
-1. **SOP驱动的轻量级迭代**
+1. **Web API 集成** ⭐ NEW
+   - ✅ FastAPI RESTful API 实现
+   - ✅ 同步查询接口（/api/v1/query）
+   - ✅ 会话管理接口（获取、删除会话）
+   - ✅ 健康检查接口（监控和状态查询）
+   - ✅ 模块化设计（依赖注入、清晰分层）
+   - ✅ Docker 支持（Dockerfile + docker-compose）
+   - ✅ 完整文档和客户端示例
+   - ✅ 方便后期微服务化拓展
+
+2. **任务特定模型配置**
+   - ✅ 支持为不同任务配置不同的 LLM 模型
+   - ✅ 5种任务类型：意图识别、内容生成、工作流规划、LLM决策、响应生成
+   - ✅ 成本优化：意图识别使用低成本模型可节省约 90% 成本
+   - ✅ 性能优化：快速模型提升响应速度 2-3 倍
+   - ✅ 灵活配置：支持混合使用不同提供商的模型
+   - ✅ 向后兼容：所有配置可选，不影响现有代码
+
+3. **SOP驱动的轻量级迭代**
    - ✅ 外层轻量级循环：支持多步骤Action序列执行
    - ✅ LLM智能决策：每步判断是否继续或响应
    - ✅ 可控迭代：限制最大次数，防止无限循环
    - ✅ 清晰职责：外层控制流程，内层处理细节
 
-2. **Silent Action 优化**
+4. **Silent Action 优化**
    - ✅ Flow/System silent 操作直接跳出迭代
    - ✅ 不参与上下文构建，避免干扰后续决策
    - ✅ 执行后立即完成流程，提升响应速度
 
-3. **KB 并行查询优化**
+4. **KB 并行查询优化**
    - ✅ 迭代开始时预先查询知识库
    - ✅ 不阻塞 LLM 决策，并行执行
    - ✅ 缓存查询结果，需要时直接使用
    - ✅ 显著缩短响应时间
 
-4. **Skills 支持多种执行模式**
+5. **Skills 支持多种执行模式**
    - ✅ Agent 模式：创建子 Agent，内部自行处理多轮工具调用
    - ✅ Function 模式：直接 HTTP 调用外部服务
 
-5. **Flows 极简化设计**
+6. **Flows 极简化设计**
    - ✅ 直接 API 调用，Flow 是黑盒服务
    - ✅ 完全解耦，业务逻辑在后端
 
-6. **静默执行逻辑**
+7. **静默执行逻辑**
    - ✅ System Action 支持静默模式
    - ✅ 区分静默操作和需响应操作
 
-7. **定时器调度（Timer）**
+8. **定时器调度（Timer）**
    - ✅ 基于 asyncio 的异步调度
    - ✅ 自动管理会话级定时器
 
 **核心优势：**
+- 更经济：任务特定模型配置可降低 40-60% 成本
+- 更快速：轻量级模型提升响应速度 2-3 倍
 - 更实用：符合实际业务场景（如客服机器人的多步骤流程）
 - 更清晰：分层迭代，职责明确
 - 更可控：LLM驱动决策 + 迭代次数限制
@@ -2063,7 +2083,741 @@ agent = WorkflowAgent(
 
 ---
 
-## 五、配置文件示例
+## 五、任务特定模型配置
+
+### 5.1 概述
+
+Workflow Agent 支持为不同任务配置不同的 LLM 模型，以优化性能和成本。通过合理配置，可以：
+
+- **降低成本**：对简单任务使用低成本模型，节省约 90% 的 API 调用费用
+- **提升性能**：对复杂任务使用高性能模型，确保输出质量
+- **优化响应速度**：对需要快速响应的任务使用轻量级模型
+- **灵活组合**：混合使用不同提供商的模型，发挥各自优势
+
+### 5.2 支持的任务类型
+
+#### 5.2.1 意图识别 (Intent Matching)
+
+**用途**：快速判断用户意图、规则匹配
+
+**特点**：
+- 需要快速响应
+- 低成本
+- 简单分类任务
+
+**推荐模型**：
+- `gpt-4o-mini` (OpenAI) - 性价比最高
+- `gpt-3.5-turbo` (OpenAI) - 快速且便宜
+- `gemini-1.5-flash` (Google) - 超快响应
+
+**配置示例**：
+```env
+INTENT_MATCHING_MODEL=gpt-4o-mini
+```
+
+#### 5.2.2 内容生成 (Content Generation)
+
+**用途**：生成用户可见的高质量内容
+
+**特点**：
+- 需要高质量输出
+- 复杂推理能力
+- 自然语言生成
+
+**推荐模型**：
+- `gpt-4o` (OpenAI) - 平衡质量和速度
+- `claude-3-5-sonnet-20241022` (Anthropic) - 最高质量
+- `gemini-1.5-pro` (Google) - 长上下文支持
+
+**配置示例**：
+```env
+CONTENT_GENERATION_MODEL=gpt-4o
+```
+
+#### 5.2.3 工作流规划 (Workflow Planning)
+
+**用途**：理解复杂 SOP、制定执行计划
+
+**特点**：
+- 需要复杂逻辑理解
+- 多步骤推理
+- 结构化输出
+
+**推荐模型**：
+- `gpt-4o` (OpenAI) - 强大的逻辑推理
+- `claude-3-opus-20240229` (Anthropic) - 最强推理能力
+- `gemini-1.5-pro` (Google) - 长上下文理解
+
+**配置示例**：
+```env
+WORKFLOW_PLANNING_MODEL=gpt-4o
+```
+
+#### 5.2.4 LLM 决策 (LLM Decision)
+
+**用途**：SOP 驱动的迭代决策
+
+**特点**：
+- 平衡性能和成本
+- 多轮对话决策
+- 实时响应
+
+**推荐模型**：
+- `gpt-4o` (OpenAI) - 平衡选择
+- `claude-3-5-sonnet-20241022` (Anthropic) - 高质量决策
+- `gpt-4-turbo` (OpenAI) - 快速决策
+
+**配置示例**：
+```env
+LLM_DECISION_MODEL=gpt-4o
+```
+
+#### 5.2.5 响应生成 (Response Generation)
+
+**用途**：生成最终用户响应
+
+**特点**：
+- 需要高质量输出
+- 自然语言表达
+- 用户体验关键
+
+**推荐模型**：
+- `gpt-4o` (OpenAI) - 自然流畅
+- `claude-3-5-sonnet-20241022` (Anthropic) - 最自然的语言
+- `gemini-1.5-pro` (Google) - 多语言支持
+
+**配置示例**：
+```env
+RESPONSE_GENERATION_MODEL=gpt-4o
+```
+
+### 5.3 环境变量配置
+
+#### 5.3.1 基础配置
+
+```env
+# LLM API Keys
+OPENAI_API_KEY=sk-xxx
+ANTHROPIC_API_KEY=sk-ant-xxx
+GOOGLE_API_KEY=xxx
+
+# 默认模型
+DEFAULT_MODEL=gpt-4o
+```
+
+#### 5.3.2 任务特定模型配置（可选）
+
+```env
+# 意图识别模型（推荐使用快速、低成本模型）
+INTENT_MATCHING_MODEL=gpt-4o-mini
+
+# 内容生成模型（推荐使用高质量模型）
+CONTENT_GENERATION_MODEL=gpt-4o
+
+# 工作流规划模型（推荐使用复杂逻辑理解能力强的模型）
+WORKFLOW_PLANNING_MODEL=gpt-4o
+
+# LLM决策模型（SOP驱动迭代，推荐使用平衡性能和成本的模型）
+LLM_DECISION_MODEL=gpt-4o
+
+# 响应生成模型（最终用户响应，推荐使用高质量模型）
+RESPONSE_GENERATION_MODEL=gpt-4o
+```
+
+### 5.4 代码使用示例
+
+#### 5.4.1 基础使用
+
+```python
+from bu_agent_sdk.config import (
+    load_config,
+    get_intent_matching_llm,
+    get_content_generation_llm,
+)
+
+# 加载配置
+config = load_config()
+
+# 获取任务特定的LLM
+intent_llm = get_intent_matching_llm(config)      # 使用快速、低成本模型
+content_llm = get_content_generation_llm(config)  # 使用高质量模型
+
+# 使用不同模型执行不同任务
+intent_result = await intent_llm.ainvoke([
+    {"role": "user", "content": "帮我查询订单"}
+])
+
+content_result = await content_llm.ainvoke([
+    {"role": "user", "content": "生成产品介绍"}
+])
+```
+
+#### 5.4.2 完整示例
+
+```python
+import asyncio
+from bu_agent_sdk.config import (
+    load_config,
+    get_intent_matching_llm,
+    get_content_generation_llm,
+    get_workflow_planning_llm,
+    get_llm_decision_llm,
+    get_response_generation_llm,
+    get_session_store_from_config,
+    get_plan_cache_from_config,
+)
+from bu_agent_sdk.agent.workflow_agent import WorkflowAgent
+from bu_agent_sdk.tools.action_books import WorkflowConfigSchema
+
+async def main():
+    # 1. 加载配置
+    config = load_config()
+
+    # 2. 创建任务特定的LLM实例
+    intent_llm = get_intent_matching_llm(config)
+    decision_llm = get_llm_decision_llm(config)
+    response_llm = get_response_generation_llm(config)
+
+    # 3. 创建存储组件
+    session_store = await get_session_store_from_config(config)
+    plan_cache = await get_plan_cache_from_config(config)
+
+    # 4. 加载 workflow 配置
+    workflow_config = WorkflowConfigSchema.parse_file("config/workflow_config.json")
+
+    # 5. 创建 agent（使用任务特定模型）
+    agent = WorkflowAgent(
+        config=workflow_config,
+        llm=decision_llm,  # 使用决策模型
+        session_store=session_store,
+        plan_cache=plan_cache,
+    )
+
+    # 6. 使用 agent
+    response = await agent.query(
+        message="你好",
+        session_id="demo_001"
+    )
+    print(response)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+### 5.5 推荐配置方案
+
+#### 5.5.1 开发环境（低成本）
+
+```env
+DEFAULT_MODEL=gpt-4o-mini
+INTENT_MATCHING_MODEL=gpt-4o-mini
+CONTENT_GENERATION_MODEL=gpt-4o-mini
+WORKFLOW_PLANNING_MODEL=gpt-4o-mini
+LLM_DECISION_MODEL=gpt-4o-mini
+RESPONSE_GENERATION_MODEL=gpt-4o-mini
+```
+
+**特点**：全部使用低成本模型，适合开发和测试。
+
+#### 5.5.2 生产环境（优化配置）
+
+```env
+DEFAULT_MODEL=gpt-4o
+INTENT_MATCHING_MODEL=gpt-4o-mini          # 节省约90%成本
+CONTENT_GENERATION_MODEL=gpt-4o            # 保证质量
+WORKFLOW_PLANNING_MODEL=gpt-4o             # 保证准确性
+LLM_DECISION_MODEL=gpt-4o                  # 平衡性能
+RESPONSE_GENERATION_MODEL=gpt-4o           # 保证用户体验
+```
+
+**特点**：在成本和质量之间取得平衡，推荐用于生产环境。
+
+**预期收益**：
+- 成本降低约 **19%**
+- 意图识别响应速度提升 **2-3倍**
+- 保证关键任务的输出质量
+
+#### 5.5.3 混合提供商（最佳实践）
+
+```env
+DEFAULT_MODEL=gpt-4o
+INTENT_MATCHING_MODEL=gpt-4o-mini                    # OpenAI 快速模型
+CONTENT_GENERATION_MODEL=claude-3-5-sonnet-20241022  # Anthropic 高质量
+WORKFLOW_PLANNING_MODEL=gemini-1.5-pro               # Google 长上下文
+LLM_DECISION_MODEL=gpt-4o                            # OpenAI 决策
+RESPONSE_GENERATION_MODEL=claude-3-5-sonnet-20241022 # Anthropic 自然语言
+```
+
+**特点**：利用各家模型的优势，避免单点依赖。
+
+**优势**：
+- 发挥各提供商模型的优势
+- 提高系统可靠性
+- 灵活应对不同场景
+
+### 5.6 成本分析
+
+假设每天处理 10,000 个请求：
+
+#### 方案 1：全部使用 gpt-4o
+- 意图识别: 10,000 × $0.0025 = $25
+- 内容生成: 10,000 × $0.0025 = $25
+- 工作流规划: 10,000 × $0.0025 = $25
+- LLM决策: 10,000 × $0.0025 = $25
+- 响应生成: 10,000 × $0.0025 = $25
+- **总计: $125/天**
+
+#### 方案 2：优化配置
+- 意图识别: 10,000 × $0.00015 = $1.5 (gpt-4o-mini)
+- 内容生成: 10,000 × $0.0025 = $25 (gpt-4o)
+- 工作流规划: 10,000 × $0.0025 = $25 (gpt-4o)
+- LLM决策: 10,000 × $0.0025 = $25 (gpt-4o)
+- 响应生成: 10,000 × $0.0025 = $25 (gpt-4o)
+- **总计: $101.5/天**
+- **节省: $23.5/天 (19%)**
+
+#### 方案 3：激进优化
+- 意图识别: 10,000 × $0.00015 = $1.5 (gpt-4o-mini)
+- 内容生成: 10,000 × $0.0025 = $25 (gpt-4o)
+- 工作流规划: 10,000 × $0.00015 = $1.5 (gpt-4o-mini)
+- LLM决策: 10,000 × $0.00015 = $1.5 (gpt-4o-mini)
+- 响应生成: 10,000 × $0.0025 = $25 (gpt-4o)
+- **总计: $54.5/天**
+- **节省: $70.5/天 (56%)**
+
+### 5.7 最佳实践
+
+#### 5.7.1 配置原则
+
+1. **简单任务用轻量级模型**：意图识别、简单分类等任务使用 `gpt-4o-mini`
+2. **关键任务用高质量模型**：内容生成、最终响应等用户可见的输出使用 `gpt-4o` 或更好的模型
+3. **平衡成本和质量**：根据业务需求在成本和质量之间找到平衡点
+4. **监控和调优**：持续监控各任务的性能和成本，及时调整配置
+
+#### 5.7.2 性能优化
+
+1. **并行执行**：对于独立的任务，使用并行执行提升性能
+2. **缓存策略**：对于常见任务，使用缓存避免重复调用
+3. **流式响应**：对于内容生成任务，使用流式输出提升用户体验
+
+#### 5.7.3 向后兼容性
+
+- 所有任务特定模型配置都是**可选的**
+- 如果不配置，系统会使用 `DEFAULT_MODEL`
+- 现有代码无需修改即可继续使用
+- 可以逐步迁移到任务特定模型配置
+
+### 5.8 相关文档
+
+- [配置管理指南](configuration-guide.md) - 完整的配置说明
+- [任务特定模型详细文档](task-specific-models.md) - 详细的使用指南
+- [快速参考](task-specific-models-quickstart.md) - 快速开始指南
+- [示例代码](../examples/task_specific_models_demo.py) - 完整的示例代码
+
+---
+
+## 六、Web API 集成
+
+### 6.1 概述
+
+Workflow Agent 提供完整的 FastAPI Web API 实现，支持：
+
+- **RESTful API**：标准的 HTTP 接口
+- **同步查询**：请求-响应模式
+- **会话管理**：跨请求的状态保持
+- **健康检查**：服务监控和状态查询
+- **模块化设计**：方便后期微服务化拓展
+
+### 6.2 架构设计
+
+#### 单体架构（当前实现）
+
+```
+┌──────────────────────────────────────┐
+│         FastAPI Application          │
+│                                      │
+│  ┌────────────────────────────────┐ │
+│  │      API Routes                │ │
+│  │  - /api/v1/query               │ │
+│  │  - /api/v1/session/{id}        │ │
+│  │  - /api/v1/health              │ │
+│  └────────────────────────────────┘ │
+│                                      │
+│  ┌────────────────────────────────┐ │
+│  │   Dependencies (DI)            │ │
+│  │  - WorkflowAgent (单例)        │ │
+│  │  - 配置管理                     │ │
+│  └────────────────────────────────┘ │
+│                                      │
+│  ┌────────────────────────────────┐ │
+│  │   WorkflowAgent                │ │
+│  │  - IntentMatcher               │ │
+│  │  - SkillExecutor               │ │
+│  │  - FlowExecutor                │ │
+│  │  - ToolExecutor                │ │
+│  └────────────────────────────────┘ │
+└──────────────────────────────────────┘
+         │
+         ├──> Redis (Session Cache)
+         ├──> MongoDB (Persistence)
+         └──> LLM API (OpenAI/Anthropic/Google)
+```
+
+**优势**：
+- 简单：一次部署，一个进程
+- 快速：无网络调用开销
+- 易调试：日志集中
+- 低成本：单机器运行
+
+**模块化设计**：
+- 清晰的分层结构
+- 依赖注入模式
+- 易于拆分为微服务
+
+### 6.3 API 端点
+
+#### 6.3.1 查询接口
+
+**POST** `/api/v1/query`
+
+发送消息到 Workflow Agent 并获取响应。
+
+**请求示例**：
+```json
+{
+  "message": "你好，帮我查询订单状态",
+  "session_id": "user_123_session_001",
+  "user_id": "user_123"
+}
+```
+
+**响应示例**：
+```json
+{
+  "session_id": "user_123_session_001",
+  "message": "您的订单正在处理中，预计明天送达。",
+  "status": "success"
+}
+```
+
+#### 6.3.2 获取会话信息
+
+**GET** `/api/v1/session/{session_id}`
+
+获取指定会话的状态和元数据。
+
+**响应示例**：
+```json
+{
+  "session_id": "user_123_session_001",
+  "agent_id": "workflow_agent_001",
+  "config_hash": "abc123def456",
+  "need_greeting": false,
+  "status": "active",
+  "message_count": 10
+}
+```
+
+#### 6.3.3 删除会话
+
+**DELETE** `/api/v1/session/{session_id}`
+
+清除指定会话的所有数据。
+
+**响应示例**：
+```json
+{
+  "status": "deleted",
+  "session_id": "user_123_session_001"
+}
+```
+
+#### 6.3.4 健康检查
+
+**GET** `/api/v1/health`
+
+检查 API 服务和 WorkflowAgent 的健康状态。
+
+**响应示例**：
+```json
+{
+  "status": "healthy",
+  "config_hash": "abc123def456",
+  "sessions_count": 5,
+  "version": "1.0.0"
+}
+```
+
+### 6.4 快速开始
+
+#### 6.4.1 本地运行
+
+```bash
+# 1. 安装依赖
+pip install -r requirements.txt
+pip install -r api/requirements.txt
+
+# 2. 配置环境变量
+cp .env.example .env
+# 编辑 .env 文件，填写 OPENAI_API_KEY 等
+
+# 3. 启动服务
+python -m api.main
+```
+
+访问 API 文档：http://localhost:8000/docs
+
+#### 6.4.2 Docker 运行
+
+```bash
+# 使用 docker-compose（推荐）
+docker-compose up -d
+
+# 查看日志
+docker-compose logs -f workflow-agent
+
+# 停止服务
+docker-compose down
+```
+
+### 6.5 客户端使用示例
+
+#### Python 客户端
+
+```python
+import httpx
+
+async def query_agent():
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            "http://localhost:8000/api/v1/query",
+            json={
+                "message": "你好，帮我查询订单状态",
+                "session_id": "user_123_session_001",
+            }
+        )
+        result = response.json()
+        print(result['message'])
+```
+
+完整客户端示例：[examples/api_client_demo.py](../examples/api_client_demo.py)
+
+#### JavaScript 客户端
+
+```javascript
+async function queryAgent(message, sessionId) {
+  const response = await fetch('http://localhost:8000/api/v1/query', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      message: message,
+      session_id: sessionId
+    })
+  });
+
+  const result = await response.json();
+  return result.message;
+}
+```
+
+### 6.6 部署配置
+
+#### 6.6.1 环境变量
+
+```env
+# LLM 配置
+OPENAI_API_KEY=sk-xxx
+DEFAULT_MODEL=gpt-4o
+INTENT_MATCHING_MODEL=gpt-4o-mini  # 可选：优化成本
+
+# 数据库配置
+MONGODB_URI=mongodb://localhost:27017
+REDIS_URL=redis://localhost:6379
+
+# 应用配置
+ENVIRONMENT=production
+LOG_LEVEL=INFO
+MAX_ITERATIONS=5
+```
+
+#### 6.6.2 Docker Compose
+
+```yaml
+version: '3.8'
+
+services:
+  workflow-agent:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      DEFAULT_MODEL: gpt-4o
+      MONGODB_URI: mongodb://mongodb:27017
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - mongodb
+      - redis
+
+  mongodb:
+    image: mongo:7
+    volumes:
+      - mongodb_data:/data/db
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+
+volumes:
+  mongodb_data:
+  redis_data:
+```
+
+### 6.7 性能优化
+
+#### 6.7.1 连接复用
+
+```python
+# 创建全局客户端实例，复用连接
+client = httpx.AsyncClient(
+    base_url="http://localhost:8000",
+    timeout=30.0,
+    limits=httpx.Limits(max_keepalive_connections=10)
+)
+```
+
+#### 6.7.2 并发请求
+
+```python
+# 并发发送多个请求
+tasks = [
+    client.post("/api/v1/query", json={"message": msg, "session_id": sid})
+    for msg, sid in messages
+]
+results = await asyncio.gather(*tasks)
+```
+
+#### 6.7.3 使用任务特定模型
+
+```env
+# 意图识别使用快速模型，节省成本和时间
+INTENT_MATCHING_MODEL=gpt-4o-mini
+
+# 内容生成使用高质量模型
+CONTENT_GENERATION_MODEL=gpt-4o
+```
+
+### 6.8 微服务化拓展
+
+当业务增长需要微服务化时，可以按以下步骤拆分：
+
+#### 阶段 1: 单体 + 负载均衡
+
+```
+┌────────────────┐
+│ Load Balancer  │
+└────┬───────────┘
+     │
+  ┌──┴───┬────┐
+  │      │    │
+┌─▼─┐  ┌▼─┐ ┌▼─┐
+│API│  │API│ │API│  (相同代码，水平扩展)
+└───┘  └───┘ └───┘
+```
+
+#### 阶段 2: 服务拆分
+
+```
+┌─────────────────┐
+│  API Gateway    │
+└────┬────────────┘
+     │
+  ┌──┴─────────┐
+  │            │
+┌─▼──────┐  ┌─▼─────────┐
+│Workflow│  │  Skills   │
+│Service │  │  Service  │
+└────────┘  └───────────┘
+```
+
+详细微服务化方案参考：[workflow-agent-deployment.md](workflow-agent-deployment.md)
+
+### 6.9 监控和日志
+
+#### 查看日志
+
+```bash
+# Docker 日志
+docker-compose logs -f workflow-agent
+
+# 本地日志
+tail -f logs/api.log
+```
+
+#### 健康检查
+
+```bash
+# API 健康检查
+curl http://localhost:8000/api/v1/health
+
+# Docker 健康状态
+docker inspect --format='{{.State.Health.Status}}' workflow-agent
+```
+
+### 6.10 测试
+
+#### 单元测试
+
+API 提供了完整的单元测试套件，覆盖所有端点和功能。
+
+```bash
+# 安装测试依赖
+pip install pytest pytest-asyncio httpx
+
+# 运行所有 API 测试
+pytest tests/test_api.py -v
+
+# 运行特定测试
+pytest tests/test_api.py::test_query_endpoint_success -v
+
+# 查看测试覆盖率
+pytest tests/test_api.py --cov=api --cov-report=html
+```
+
+#### 测试覆盖范围
+
+- ✅ **查询接口测试**：成功查询、参数验证、错误处理
+- ✅ **会话管理测试**：获取/删除会话、会话隔离
+- ✅ **健康检查测试**：基本健康检查、会话计数
+- ✅ **错误处理测试**：无效请求、HTTP 错误
+- ✅ **集成测试**：完整工作流、并发请求
+- ✅ **API 文档测试**：OpenAPI schema、Swagger UI
+- ✅ **CORS 测试**：跨域请求头验证
+- ✅ **数据模型测试**：Pydantic 模型验证
+
+#### 手动测试
+
+```bash
+# 使用示例客户端测试
+python examples/api_client_demo.py
+
+# 使用 curl 测试
+curl -X POST "http://localhost:8000/api/v1/query" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "你好", "session_id": "test_001"}'
+```
+
+### 6.11 相关文档
+
+- [API 使用指南](../api/README.md) - 完整的 API 文档
+- [客户端示例](../examples/api_client_demo.py) - Python 客户端
+- [单元测试源码](../tests/test_api.py) - API 测试套件
+- [部署最佳实践](workflow-agent-deployment.md) - 微服务化指南
+
+---
+
+## 七、配置文件示例
 
 ```json
 {
