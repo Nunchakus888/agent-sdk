@@ -50,19 +50,22 @@ async def lifespan(app: FastAPI):
         config_dir = os.getenv("CONFIG_DIR", "config")
         idle_timeout = int(os.getenv("AGENT_IDLE_TIMEOUT", "300"))  # 5分钟
         cleanup_interval = int(os.getenv("AGENT_CLEANUP_INTERVAL", "60"))  # 1分钟
+        enable_llm_parsing = os.getenv("ENABLE_LLM_PARSING", "true").lower() == "true"
 
         # 初始化 AgentManager
         manager = await initialize_agent_manager(
             config_dir=config_dir,
             idle_timeout=idle_timeout,
             cleanup_interval=cleanup_interval,
+            enable_llm_parsing=enable_llm_parsing,
         )
 
         logger.info(
             f"AgentManager initialized successfully - "
             f"config_dir: {config_dir}, "
             f"idle_timeout: {idle_timeout}s, "
-            f"cleanup_interval: {cleanup_interval}s"
+            f"cleanup_interval: {cleanup_interval}s, "
+            f"enable_llm_parsing: {enable_llm_parsing}"
         )
 
     except Exception as e:

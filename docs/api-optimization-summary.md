@@ -1,7 +1,8 @@
 # API 架构优化总结
 
 ## 优化时间
-2026-01-23
+- 初始优化：2026-01-23
+- 配置解析优化：2026-01-26
 
 ## 优化概述
 
@@ -9,8 +10,11 @@
 - 多租户隔离（tenant_id）
 - 多 Chatbot 支持（chatbot_id）
 - 会话级别的 Agent 管理
+- **配置文件 LLM 解析和缓存**（2026-01-26 新增）
 - 配置文件动态加载和热重载
 - Agent 自动回收机制
+
+> **重要更新（2026-01-26）**：实现了配置文件的 LLM 解析和缓存机制。详见 [API 配置解析和缓存架构](./api-config-parsing.md)
 
 ## 核心变更
 
@@ -47,11 +51,18 @@ class QueryRequest(BaseModel):
 
 #### 核心功能
 
-1. **Agent 缓存管理**
+1. **配置解析和缓存**（2026-01-26 新增）
+   - 通过 LLM 解析原始 JSON 配置
+   - 按 config_hash 缓存解析结果
+   - 相同配置的请求复用缓存
+   - 避免重复解析，节省成本和时间
+   - 详见：[API 配置解析和缓存架构](./api-config-parsing.md)
+
+2. **Agent 缓存管理**
    - 按 `tenant_id:chatbot_id` 缓存 Agent
    - 避免重复创建，提升性能
 
-2. **配置文件动态加载**
+3. **配置文件动态加载**
    ```python
    # 支持多种配置文件路径
    # 1. config/{tenant_id}/{chatbot_id}.json
@@ -59,15 +70,15 @@ class QueryRequest(BaseModel):
    # 3. config/workflow_config.json (默认)
    ```
 
-3. **配置变更检测**
+4. **配置变更检测**
    - 通过 md5_checksum 检测配置变更
    - 自动重新加载配置并重建 Agent
 
-4. **会话计数管理**
+5. **会话计数管理**
    - 跟踪每个 Agent 的活跃会话数
    - 支持会话添加和释放
 
-5. **自动回收机制**
+6. **自动回收机制**
    - 定期检查空闲 Agent（默认每分钟）
    - 自动回收超时 Agent（默认 5 分钟无会话）
    - 后台异步清理任务
@@ -76,6 +87,11 @@ class QueryRequest(BaseModel):
 
 ```python
 class AgentManager:
+    # 配置解析和缓存（2026-01-26 新增）
+    async def _parse_config(raw_config, config_hash) -> ParsedConfig
+    async def _get_or_parse_config(chatbot_id, tenant_id, md5_checksum) -> ParsedConfig
+
+    # Agent 管理
     async def get_or_create_agent(
         chatbot_id, tenant_id, session_id, md5_checksum
     ) -> WorkflowAgent
