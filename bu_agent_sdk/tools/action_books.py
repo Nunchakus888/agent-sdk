@@ -149,81 +149,87 @@ class IterationDecision(BaseModel):
 
 
 class WorkflowConfigSchema(BaseModel):
-    """Complete workflow configuration schema."""
+    """
+    Complete workflow configuration schema.
 
-    # Basic settings
-    basic_settings: dict = Field(
-        description="Name, language, tone, etc.",
-        default_factory=dict
+    Separates fixed configuration (no LLM parsing) from LLM-parsed configuration.
+    - Fixed config: kb_config (hardcoded pattern execution, appended to instructions)
+    - LLM-parsed: instructions, skills, tools, flows, timers, need_greeting, constraints
+    - Environment-driven: max_iterations, iteration_strategy
+
+    Note: Knowledge base info is automatically appended to instructions after LLM parsing.
+    """
+
+    # =========================================================================
+    # Fixed Configuration (no LLM parsing)
+    # =========================================================================
+
+    kb_config: dict = Field(
+        default_factory=dict,
+        description="Knowledge base config - fixed pattern execution (no LLM parsing)"
     )
 
-    # Tool definitions (HTTP API)
+    # =========================================================================
+    # LLM-Parsed Configuration (enhanced through LLM)
+    # =========================================================================
+
+    # Backward compatibility
+    instructions: str | None = Field(
+        default=None,
+        description="Workflow instructions (LLM-parsed, integrates basic_settings and extracts workflow). Replaces 'sop' field."
+    )
+
+    skills: list[dict] = Field(
+        default_factory=list,
+        description="Skills list (LLM-parsed) - structure: {condition, action, tools}"
+    )
+
     tools: list[dict] = Field(
         default_factory=list,
-        description="HTTP tool config list (reuse ConfigToolLoader)"
+        description="Tool config list (LLM-parsed) - includes both regular and silent tools"
     )
 
-    # Skill definitions
-    skills: list[SkillDefinition] = Field(
-        default_factory=list,
-        description="Complex multi-step skill list"
-    )
-
-    # Flow definitions
     flows: list[FlowDefinition] = Field(
         default_factory=list,
-        description="Fixed flow definition list"
+        description="Fixed flow definition list (LLM-parsed)"
     )
 
-    # System actions
+    timers: list[TimerConfig] = Field(
+        default_factory=list,
+        description="Timer task config (LLM-parsed)"
+    )
+
+    need_greeting: str = Field(
+        default="",
+        description="Greeting message if needed (LLM-parsed), empty if not needed"
+    )
+
+    # =========================================================================
+    # Other Configuration
+    # =========================================================================
+
     system_actions: list[SystemAction] = Field(
         default_factory=list,
         description="System-level actions (handoff, close, etc.)"
     )
 
-    # Intent mapping rules
     action_books: list[ActionBookEntry] = Field(
         default_factory=list,
         description="Intent matching rule list"
     )
 
-    # Timers
-    timers: list[TimerConfig] = Field(
-        default_factory=list,
-        description="Timer task config"
-    )
-
-    # Greeting
-    greeting: str | None = Field(
-        default=None,
-        description="Greeting message for first conversation"
-    )
-
-    # SOP (optional)
-    sop: str | None = Field(
-        default=None,
-        description="Standard Operating Procedure description"
-    )
-
-    # Constraints (optional)
     constraints: str | None = Field(
         default=None,
-        description="Conversation constraints and boundary rules"
-    )
-
-    # KB config (optional)
-    kb_config: dict | None = Field(
-        default=None,
-        description="Knowledge base config: enable KB enhancement, KB tool name, etc."
+        description="Conversation constraints and boundary rules (LLM-inferred if necessary)"
     )
 
     # Iteration control config
     max_iterations: int = Field(
         default=5,
-        description="Max iterations (prevent infinite loop)"
+        description="Max iterations (from env var MAX_ITERATIONS or config)"
     )
 
     iteration_strategy: str = Field(
         default="sop_driven",
-        description="Iteration strategy: sop_driven (multi-step) | single_shot (single execution)"
+        description="Iteration strategy (from env var ITERATION_STRATEGY or config): sop_driven | single_shot"
     )
