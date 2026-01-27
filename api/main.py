@@ -157,9 +157,40 @@ async def root():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=8000,
-        log_level="info",
+    # 从环境变量读取运行配置
+    debug = os.getenv("DEBUG", "false").lower() == "true"
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", "8000"))
+    workers = int(os.getenv("WORKERS", "1"))
+
+    # 热更新配置
+    # 注意：使用 reload 时必须用字符串形式的应用路径
+    reload_enabled = os.getenv("RELOAD", str(debug)).lower() == "true"
+    reload_dirs = ["api", "bu_agent_sdk"] if reload_enabled else None
+
+    logger.info(
+        f"Starting server - host: {host}, port: {port}, "
+        f"debug: {debug}, reload: {reload_enabled}"
     )
+
+    if reload_enabled:
+        # 开发模式：启用热更新
+        # 必须使用字符串形式 "module:app"，不能直接传入 app 对象
+        uvicorn.run(
+            "api.main:app",
+            host=host,
+            port=port,
+            reload=True,
+            reload_dirs=reload_dirs,
+            reload_delay=0.25,  # 文件变化后延迟重载（秒）
+            log_level="debug" if debug else "info",
+        )
+    else:
+        # 生产模式：多 worker 支持
+        uvicorn.run(
+            "api.main:app",
+            host=host,
+            port=port,
+            workers=workers,
+            log_level="info",
+        )

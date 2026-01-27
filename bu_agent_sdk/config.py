@@ -30,6 +30,12 @@ class DatabaseConfig(BaseModel):
 class LLMConfig(BaseModel):
     """LLM配置"""
 
+    # Provider 配置（显式指定时优先于模型名称推断）
+    provider: str | None = Field(
+        default=None,
+        description="LLM 提供商: openai | anthropic | google。设置后优先使用该提供商"
+    )
+
     openai_api_key: str | None = Field(default=None)
     openai_base_url: str | None = Field(default=None)
 
@@ -112,6 +118,7 @@ def load_config(env_file: str | Path | None = None) -> AppConfig:
         ),
 
         llm=LLMConfig(
+            provider=os.getenv("LLM_PROVIDER", "openai"),  # 显式指定提供商
             openai_api_key=os.getenv("OPENAI_API_KEY"),
             openai_base_url=os.getenv("OPENAI_BASE_URL"),
             anthropic_api_key=os.getenv("ANTHROPIC_API_KEY"),
@@ -127,6 +134,39 @@ def load_config(env_file: str | Path | None = None) -> AppConfig:
     )
 
     return config
+
+
+def _infer_provider_from_model(model: str) -> str:
+    """
+    根据模型名称推断提供商
+
+    Args:
+        model: 模型名称
+
+    Returns:
+        str: 提供商名称 (openai | anthropic | google)
+
+    Raises:
+        ValueError: 无法推断提供商时抛出
+    """
+    model_lower = model.lower()
+
+    # OpenAI 模型前缀
+    if any(model_lower.startswith(prefix) for prefix in ("gpt", "o1", "o3", "o4")):
+        return "openai"
+
+    # Anthropic 模型前缀
+    if model_lower.startswith("claude"):
+        return "anthropic"
+
+    # Google 模型前缀
+    if model_lower.startswith("gemini") or model_lower.startswith("google/"):
+        return "google"
+
+    raise ValueError(
+        f"Cannot infer provider from model name: {model}. "
+        f"Please set LLM_PROVIDER environment variable to: openai | anthropic | google"
+    )
 
 
 def get_llm_from_config(config: AppConfig, model_override: str | None = None):
@@ -151,12 +191,17 @@ def get_llm_from_config(config: AppConfig, model_override: str | None = None):
         intent_llm = get_llm_from_config(config, config.llm.intent_matching_model)
         ```
     """
-    from bu_agent_sdk.llm import ChatOpenAI, ChatAnthropic, ChatGoogleGenAI
+    from bu_agent_sdk.llm import ChatOpenAI, ChatAnthropic, ChatGoogle
 
     model = model_override or config.llm.default_model
+    provider = config.llm.provider
 
-    # 根据模型名称选择LLM
-    if model.startswith("gpt"):
+    # 确定提供商：优先使用显式配置，否则从模型名称推断
+    if provider is None:
+        provider = _infer_provider_from_model(model)
+
+    # 根据提供商创建 LLM 实例
+    if provider == "openai":
         if not config.llm.openai_api_key:
             raise ValueError("OPENAI_API_KEY not set")
 
@@ -166,7 +211,7 @@ def get_llm_from_config(config: AppConfig, model_override: str | None = None):
             base_url=config.llm.openai_base_url,
         )
 
-    elif model.startswith("claude"):
+    elif provider == "anthropic":
         if not config.llm.anthropic_api_key:
             raise ValueError("ANTHROPIC_API_KEY not set")
 
@@ -175,17 +220,19 @@ def get_llm_from_config(config: AppConfig, model_override: str | None = None):
             api_key=config.llm.anthropic_api_key,
         )
 
-    elif model.startswith("gemini"):
+    elif provider == "google":
         if not config.llm.google_api_key:
             raise ValueError("GOOGLE_API_KEY not set")
 
-        return ChatGoogleGenAI(
-            model=model,
+        # Strip the google/ prefix if present
+        model_name = model.removeprefix("google/")
+        return ChatGoogle(
+            model=model_name,
             api_key=config.llm.google_api_key,
         )
 
     else:
-        raise ValueError(f"Unsupported model: {model}")
+        raise ValueError(f"Unsupported provider: {provider} (model: {model})")
 
 
 async def get_session_store_from_config(config: AppConfig):
