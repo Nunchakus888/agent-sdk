@@ -6,14 +6,14 @@ from openai.types.chat import (
     ChatCompletionContentPartRefusalParam,
     ChatCompletionContentPartTextParam,
     ChatCompletionDeveloperMessageParam,
-    ChatCompletionMessageFunctionToolCallParam,
     ChatCompletionMessageParam,
+    ChatCompletionMessageToolCallParam,
     ChatCompletionSystemMessageParam,
     ChatCompletionToolMessageParam,
     ChatCompletionUserMessageParam,
 )
 from openai.types.chat.chat_completion_content_part_image_param import ImageURL
-from openai.types.chat.chat_completion_message_function_tool_call_param import Function
+from openai.types.chat.chat_completion_message_tool_call_param import Function
 
 from bu_agent_sdk.llm.messages import (
     AssistantMessage,
@@ -140,8 +140,8 @@ class OpenAIMessageSerializer:
     @staticmethod
     def _serialize_tool_call(
         tool_call: ToolCall,
-    ) -> ChatCompletionMessageFunctionToolCallParam:
-        return ChatCompletionMessageFunctionToolCallParam(
+    ) -> ChatCompletionMessageToolCallParam:
+        return ChatCompletionMessageToolCallParam(
             id=tool_call.id,
             function=Function(
                 name=tool_call.function.name, arguments=tool_call.function.arguments

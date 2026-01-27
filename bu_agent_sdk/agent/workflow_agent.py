@@ -135,9 +135,9 @@ class WorkflowAgent:
 
     async def _send_greeting(self, session: Session) -> str | None:
         """Send greeting message."""
-        if session.workflow_state.need_greeting and self.config.greeting:
+        if session.workflow_state.need_greeting and self.config.need_greeting:
             session.workflow_state.need_greeting = False
-            return self.config.greeting
+            return self.config.need_greeting
         return None
 
     async def query(

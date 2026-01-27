@@ -314,14 +314,14 @@ class AgentManager:
             # 调用 LLM
             logger.info("Calling LLM for config validation and enhancement...")
 
-            # 使用 LLM 的 generate 方法
-            from bu_agent_sdk.llm.base import Message
+            # 使用 LLM 的 ainvoke 方法
+            from bu_agent_sdk.llm.messages import UserMessage
 
-            messages = [Message(role="user", content=validation_prompt)]
-            response = await llm.agenerate(messages=messages, temperature=0.3, max_tokens=4000)
+            messages = [UserMessage(content=validation_prompt)]
+            response = await llm.ainvoke(messages=messages)
 
             # 提取响应文本
-            response_text = response.content if hasattr(response, 'content') else str(response)
+            response_text = response.content if response.content else ""
 
             # 解析 LLM 响应
             enhanced_config = self._parse_llm_config_response(response_text, raw_config)

@@ -28,14 +28,8 @@ from bu_agent_sdk.tools.action_books import WorkflowConfigSchema
 def test_workflow_config():
     """Create test workflow configuration."""
     return WorkflowConfigSchema(
-        basic_settings={
-            "name": "Test Workflow Agent",
-            "description": "Test agent for API testing",
-            "language": "English",
-            "tone": "Professional"
-        },
-        greeting="Hello! How can I help you?",
-        sop="1. Understand needs\n2. Execute action\n3. Provide feedback",
+        instructions="1. Understand needs\n2. Execute action\n3. Provide feedback",
+        need_greeting="Hello! How can I help you?",
         constraints="Be helpful",
         tools=[],
         skills=[],
