@@ -12,9 +12,32 @@ Correlation ID 模块
 """
 
 import contextvars
-import uuid
 from contextlib import contextmanager
-from typing import Any, Generator
+from typing import Any, Generator, NewType
+
+try:
+    import nanoid
+except ImportError:
+    # 回退到 uuid（向后兼容）
+    import uuid
+    nanoid = None
+
+
+# =============================================================================
+# ID 生成配置
+# =============================================================================
+
+# ID 生成字母表（62 字符：数字 + 大小写字母）
+# 使用 URL-safe 字符集，避免特殊字符
+ID_GENERATION_ALPHABET: str = (
+    "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+)
+
+# ID 长度配置
+ID_SIZE: int = 10  # 10 字符 ID，62^10 ≈ 8.4×10^17 种可能
+
+# UniqueId 类型别名（用于类型提示）
+UniqueId = NewType("UniqueId", str)
 
 
 # =============================================================================
@@ -30,9 +53,37 @@ _correlation_properties: contextvars.ContextVar[dict] = contextvars.ContextVar(
 )
 
 
+# =============================================================================
+# ID 生成函数
+# =============================================================================
+
+
+def generate_id() -> UniqueId:
+    """
+    生成唯一 ID（使用 nanoid）
+    
+    Returns:
+        UniqueId: 唯一标识符
+    """
+    if nanoid is not None:
+        return UniqueId(nanoid.generate(size=ID_SIZE, alphabet=ID_GENERATION_ALPHABET))
+    else:
+        # 回退到 uuid（向后兼容）
+        import uuid
+        return UniqueId(uuid.uuid4().hex[:ID_SIZE])
+
+
 def generate_request_id() -> str:
-    """生成唯一请求 ID"""
-    return uuid.uuid4().hex[:12]
+    """
+    生成唯一请求 ID
+    
+    使用 nanoid 生成更短、更友好的 ID。
+    如果 nanoid 不可用，回退到 uuid。
+    
+    Returns:
+        str: 请求 ID 字符串
+    """
+    return str(generate_id())
 
 
 # =============================================================================

@@ -6,11 +6,15 @@
 
 from api.core.correlation import (
     correlator,
+    generate_id,
     generate_request_id,
     get_correlation_id,
     get_request_id,
     get_session_id,
     ContextualCorrelator,
+    UniqueId,
+    ID_GENERATION_ALPHABET,
+    ID_SIZE,
 )
 from api.core.logging import setup_logging, get_logger
 from api.core.middleware import setup_middlewares
@@ -18,11 +22,15 @@ from api.core.middleware import setup_middlewares
 __all__ = [
     # Correlation
     "correlator",
+    "generate_id",
     "generate_request_id",
     "get_correlation_id",
     "get_request_id",
     "get_session_id",
     "ContextualCorrelator",
+    "UniqueId",
+    "ID_GENERATION_ALPHABET",
+    "ID_SIZE",
     # Logging
     "setup_logging",
     "get_logger",

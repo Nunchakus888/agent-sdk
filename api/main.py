@@ -16,13 +16,15 @@ from starlette.types import Receive, Scope, Send
 from api import __version__
 from api.core import setup_logging, get_logger, setup_middlewares
 from api.routes import router
-from api.dependencies import (
+from api.container import (
     initialize_workflow_engine,
     shutdown_workflow_engine,
     initialize_agent_manager,
     shutdown_agent_manager,
     initialize_task_manager,
     shutdown_task_manager,
+    initialize_database,
+    initialize_repository_manager,
 )
 
 # 初始化日志
@@ -56,8 +58,18 @@ async def lifespan(app: FastAPI):
         agent_ttl = int(os.getenv("AGENT_TTL", "3600"))
 
         # MongoDB 配置（可选）
+        # 如果设置了 MONGODB_URI，自动启用 MongoDB
+        mongodb_uri = os.getenv("MONGODB_URI")
         enable_mongodb = os.getenv("ENABLE_MONGODB", "false").lower() == "true"
-        mongodb_uri = os.getenv("MONGODB_URI") if enable_mongodb else None
+        
+        # 如果 ENABLE_MONGODB=true 但 MONGODB_URI 未设置，给出警告
+        if enable_mongodb and not mongodb_uri:
+            logger.warning(
+                "ENABLE_MONGODB=true but MONGODB_URI not set. "
+                "Falling back to memory mode."
+            )
+            mongodb_uri = None
+        
         mongodb_db = os.getenv("MONGODB_DB", "workflow_agent")
 
         # 初始化 WorkflowEngine
@@ -102,6 +114,24 @@ async def lifespan(app: FastAPI):
         # 初始化 TaskManager（协程任务取消机制）
         task_manager = initialize_task_manager()
         logger.info("TaskManager initialized")
+
+        # 初始化 Database 和 RepositoryManager
+        if mongodb_uri:
+            logger.info(f"Initializing database: {mongodb_db}")
+            db = await initialize_database(db_name=mongodb_db)
+            if db:
+                logger.info(f"✓ Database initialized successfully: {mongodb_db}")
+            else:
+                logger.error(
+                    f"✗ Database initialization failed: {mongodb_db}. "
+                    "Check MongoDB connection and configuration."
+                )
+        else:
+            logger.info("Database not enabled (memory mode)")
+            db = None
+
+        repo_manager = initialize_repository_manager()
+        logger.info(f"RepositoryManager initialized: persistent={repo_manager.is_persistent}")
 
     except Exception as e:
         logger.error(f"Failed to initialize: {e}", exc_info=True)

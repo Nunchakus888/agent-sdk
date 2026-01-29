@@ -45,8 +45,10 @@ observability = ["lmnr>=0.4.0"]
 api = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
+    "pydantic>=2.5.0",
     "python-multipart>=0.0.9",
-    "redis>=5.0.0",
+    "nanoid>=2.0.0",  # URL-safe unique ID generation
+    "redis[hiredis]>=5.0.0",  # Redis with hiredis for better performance
     "motor>=3.3.0",  # MongoDB async driver
     "asyncpg>=0.29.0",  # PostgreSQL async driver
 ]

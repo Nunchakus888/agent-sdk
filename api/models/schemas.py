@@ -1,7 +1,7 @@
 """
-API 数据模型
+API 请求/响应模型
 
-定义请求和响应的 Pydantic 模型
+定义 FastAPI 的 Pydantic 模型（请求和响应）
 """
 
 from typing import Any, Dict, Optional
