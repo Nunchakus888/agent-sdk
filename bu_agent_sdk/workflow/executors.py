@@ -22,7 +22,7 @@ from bu_agent_sdk import Agent
 from bu_agent_sdk.agent import TaskComplete
 from bu_agent_sdk.tools import tool
 from bu_agent_sdk.llm.base import BaseChatModel
-from bu_agent_sdk.tools.action_books import (
+from bu_agent_sdk.tools.actions import (
     SkillDefinition,
     FlowDefinition,
     SystemAction,
@@ -258,6 +258,7 @@ class FlowExecutor:
             )
 
             # Handle response
+            flow_name = flow.get_identifier()
             if response.is_success:
                 result_text = self._parse_response(response)
 
@@ -265,17 +266,18 @@ class FlowExecutor:
                 if flow.response_template:
                     return flow.response_template.replace("{result}", result_text)
                 else:
-                    return f"✅ [{flow.name}] Execution completed\n\n{result_text}"
+                    return f"✅ [{flow_name}] Execution completed\n\n{result_text}"
             else:
-                return f"❌ [{flow.name}] Execution failed: HTTP {response.status_code}\n{response.text}"
+                return f"❌ [{flow_name}] Execution failed: HTTP {response.status_code}\n{response.text}"
 
         except Exception as e:
-            return f"❌ [{flow.name}] Execution failed: {e}"
+            flow_name = flow.get_identifier()
+            return f"❌ [{flow_name}] Execution failed: {e}"
 
     def _get_flow(self, flow_id: str) -> FlowDefinition | None:
-        """Find flow definition."""
+        """Find flow definition by flow_id or name."""
         return next(
-            (f for f in self.config.flows if f.flow_id == flow_id),
+            (f for f in self.config.flows if f.flow_id == flow_id or f.name == flow_id),
             None
         )
 

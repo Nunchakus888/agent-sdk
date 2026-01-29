@@ -11,7 +11,7 @@ from typing import Any
 
 from bu_agent_sdk.llm.base import BaseChatModel
 from bu_agent_sdk.llm.messages import SystemMessage, UserMessage
-from bu_agent_sdk.tools.action_books import (
+from bu_agent_sdk.tools.actions import (
     ActionType,
     FlowDefinition,
     WorkflowConfigSchema,
@@ -150,12 +150,6 @@ class IntentMatcher:
             for t in self.config.tools
         ])
 
-        # List Action Books
-        action_books_list = "\n".join([
-            f"  {i+1}. {ab.condition} → {ab.action_type}:{ab.action_target}"
-            for i, ab in enumerate(self.config.action_books)
-        ])
-
         prompt = f"""You are an intent matcher for a workflow agent.
 
 ## Available Resources
@@ -165,9 +159,6 @@ class IntentMatcher:
 
 ### Tools (Single function calls)
 {tools_list or "  (none)"}
-
-### Action Rules
-{action_books_list or "  (none)"}
 
 ## Your Task
 

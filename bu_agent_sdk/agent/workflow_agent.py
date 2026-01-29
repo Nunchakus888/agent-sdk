@@ -17,7 +17,7 @@ from typing import Any
 
 from bu_agent_sdk.llm.base import BaseChatModel
 from bu_agent_sdk.llm.messages import SystemMessage, UserMessage
-from bu_agent_sdk.tools.action_books import (
+from bu_agent_sdk.tools.actions import (
     IterationDecision,
     WorkflowConfigSchema,
 )
@@ -339,7 +339,7 @@ class WorkflowAgent:
         # Build decision prompt
         system_prompt = f"""You are following this SOP:
 
-{self.config.sop or "No specific SOP provided"}
+{self.config.instructions or "No specific SOP provided"}
 
 ## Current Situation
 - User message: {user_message}
@@ -427,7 +427,11 @@ Decide the next action based on the SOP and current situation.
         if self.config.system_actions:
             lines.append("\n### System Actions")
             for action in self.config.system_actions:
-                lines.append(f"  - {action.action_id}: {action.name}")
+                # Handle both string and object formats
+                if isinstance(action, str):
+                    lines.append(f"  - {action}")
+                else:
+                    lines.append(f"  - {action.action_id}: {action.name}")
 
         return "\n".join(lines) if lines else "No actions available"
 

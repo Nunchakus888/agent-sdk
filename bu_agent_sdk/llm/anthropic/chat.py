@@ -13,7 +13,7 @@ from anthropic import (
     AsyncAnthropic,
     NotGiven,
     RateLimitError,
-    omit,
+    Omit,
 )
 from anthropic.types import CacheControlEphemeralParam, Message, ToolParam
 from anthropic.types.model_param import ModelParam
@@ -297,7 +297,7 @@ class ChatAnthropic(BaseChatModel):
             response = await self.get_client().messages.create(
                 model=self.model,
                 messages=anthropic_messages,
-                system=system_prompt or omit,
+                system=system_prompt or Omit(),
                 **invoke_params,
             )
 
