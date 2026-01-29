@@ -18,7 +18,25 @@ from api.services.database import (
     Database,
     get_database,
 )
+from api.models import (
+    SessionDocument,
+    SessionStatus,
+    MessageDocument,
+    MessageRole,
+    AgentStateDocument,
+    AgentStatus,
+    AuditLogDocument,
+    AuditAction,
+)
 from api.services.task_manager import TaskManager
+from api.services.repositories import (
+    RepositoryManager,
+    SessionRepository,
+    MessageRepository,
+    AgentStateRepository,
+    AuditLogRepository,
+    create_repository_manager,
+)
 
 __all__ = [
     # Agent 管理
@@ -36,6 +54,22 @@ __all__ = [
     "COLLECTIONS",
     "Database",
     "get_database",
+    # 数据模型
+    "SessionDocument",
+    "SessionStatus",
+    "MessageDocument",
+    "MessageRole",
+    "AgentStateDocument",
+    "AgentStatus",
+    "AuditLogDocument",
+    "AuditAction",
+    # Repository
+    "RepositoryManager",
+    "SessionRepository",
+    "MessageRepository",
+    "AgentStateRepository",
+    "AuditLogRepository",
+    "create_repository_manager",
     # 任务管理（协程取消机制）
     "TaskManager",
 ]

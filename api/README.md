@@ -512,7 +512,7 @@ docker inspect --format='{{.State.Health.Status}}' workflow-agent
 lsof -i :8000
 
 # 检查配置文件
-python -c "from api.dependencies import initialize_agent; import asyncio; asyncio.run(initialize_agent())"
+python -c "from api.container import initialize_agent; import asyncio; asyncio.run(initialize_agent())"
 ```
 
 ### 问题：数据库连接失败

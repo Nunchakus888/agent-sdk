@@ -1,7 +1,7 @@
 """
-依赖注入模块
+依赖注入容器
 
-提供全局依赖项，支持：
+提供全局服务容器和依赖注入，支持：
 - WorkflowEngine 单例（统一的工作流引擎）
 - AgentManager 单例（Agent 生命周期管理）
 - TaskManager 单例（协程任务取消机制）

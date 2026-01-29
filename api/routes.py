@@ -16,8 +16,11 @@ from api.models import (
     ErrorResponse,
     AgentStats,
     ChatAsyncResponse,
+    MessageRole,
+    AuditAction,
+    AgentStatus,
 )
-from api.dependencies import AgentManagerDep, TaskManagerDep
+from api.container import AgentManagerDep, TaskManagerDep, RepositoryManagerDep
 from api.core.correlation import generate_request_id
 
 logger = logging.getLogger(__name__)
@@ -40,7 +43,11 @@ router = APIRouter()
     summary="查询接口",
     description="发送消息到 Workflow Agent 并获取响应（会话维度）",
 )
-async def query(request: QueryRequest, manager: AgentManagerDep):
+async def query(
+    request: QueryRequest,
+    manager: AgentManagerDep,
+    repos: RepositoryManagerDep,
+):
     """
     同步查询接口
 
@@ -77,6 +84,9 @@ async def query(request: QueryRequest, manager: AgentManagerDep):
     }
     ```
     """
+    start_time = time.time()
+    correlation_id = f"R{generate_request_id()}"
+
     try:
         logger.info(
             f"Query request - session_id: {request.session_id}, "
@@ -84,8 +94,31 @@ async def query(request: QueryRequest, manager: AgentManagerDep):
             f"customer_id: {request.customer_id}, message: {request.message[:50]}..."
         )
 
-        # 获取或创建 Agent
-        # config_hash 由客户端提供，用于配置变更检测
+        # 1. 获取或创建会话
+        session, session_created = await repos.sessions.get_or_create(
+            session_id=request.session_id,
+            tenant_id=request.tenant_id,
+            chatbot_id=request.chatbot_id,
+            customer_id=request.customer_id,
+            config_hash=request.md5_checksum,
+            title=request.session_title,
+            source=request.source or "api",
+            is_preview=request.is_preview,
+            metadata=request.autofill_params,
+        )
+
+        if session_created:
+            # 记录会话创建审计日志
+            await repos.audit_logs.log(
+                tenant_id=request.tenant_id,
+                action=AuditAction.SESSION_CREATED,
+                session_id=request.session_id,
+                chatbot_id=request.chatbot_id,
+                correlation_id=correlation_id,
+                details={"customer_id": request.customer_id, "source": request.source},
+            )
+
+        # 2. 获取或创建 Agent
         agent = await manager.get_or_create_agent(
             chatbot_id=request.chatbot_id,
             tenant_id=request.tenant_id,
@@ -93,20 +126,94 @@ async def query(request: QueryRequest, manager: AgentManagerDep):
             config_hash=request.md5_checksum or "default",
         )
 
-        # 调用 WorkflowAgent
-        result = await agent.query(
-            message=request.message,
-            session_id=request.session_id,
-        )
-
         # 获取 Agent 信息
         agent_info = manager.get_agent_info(request.chatbot_id, request.tenant_id)
         agent_id = agent_info["agent_id"] if agent_info else None
         config_hash = agent_info["config_hash"] if agent_info else None
 
+        # 更新会话的 agent_id 和 config_hash
+        await repos.sessions.update(
+            request.session_id,
+            agent_id=agent_id,
+            config_hash=config_hash,
+        )
+
+        # 3. 更新 Agent 状态
+        await repos.agent_states.create_or_update(
+            tenant_id=request.tenant_id,
+            chatbot_id=request.chatbot_id,
+            status=AgentStatus.PROCESSING,
+            config_hash=config_hash or "",
+        )
+        await repos.agent_states.add_session(agent_id, request.session_id)
+
+        # 4. 存储用户消息
+        user_message = await repos.messages.create(
+            session_id=request.session_id,
+            tenant_id=request.tenant_id,
+            role=MessageRole.USER,
+            content=request.message,
+            correlation_id=correlation_id,
+        )
+
+        # 记录消息接收审计日志
+        await repos.audit_logs.log(
+            tenant_id=request.tenant_id,
+            action=AuditAction.MESSAGE_RECEIVED,
+            session_id=request.session_id,
+            agent_id=agent_id,
+            chatbot_id=request.chatbot_id,
+            message_id=user_message.message_id,
+            correlation_id=correlation_id,
+            details={"content_length": len(request.message)},
+        )
+
+        # 5. 调用 WorkflowAgent
+        query_start = time.time()
+        result = await agent.query(
+            message=request.message,
+            session_id=request.session_id,
+        )
+        query_latency_ms = int((time.time() - query_start) * 1000)
+
+        # 6. 存储 Agent 响应消息
+        assistant_message = await repos.messages.create(
+            session_id=request.session_id,
+            tenant_id=request.tenant_id,
+            role=MessageRole.ASSISTANT,
+            content=result,
+            correlation_id=correlation_id,
+            parent_message_id=user_message.message_id,
+            latency_ms=query_latency_ms,
+        )
+
+        # 7. 更新会话消息计数
+        await repos.sessions.increment_message_count(request.session_id, increment=2)
+
+        # 8. 更新 Agent 状态统计
+        await repos.agent_states.increment_message_count(agent_id, increment=2)
+
+        # 记录消息发送审计日志
+        total_duration_ms = int((time.time() - start_time) * 1000)
+        await repos.audit_logs.log(
+            tenant_id=request.tenant_id,
+            action=AuditAction.MESSAGE_SENT,
+            session_id=request.session_id,
+            agent_id=agent_id,
+            chatbot_id=request.chatbot_id,
+            message_id=assistant_message.message_id,
+            correlation_id=correlation_id,
+            details={
+                "content_length": len(result),
+                "query_latency_ms": query_latency_ms,
+            },
+            duration_ms=total_duration_ms,
+        )
+
         logger.info(
             f"Query success - session_id: {request.session_id}, "
-            f"agent_id: {agent_id}, response: {result[:50]}..."
+            f"agent_id: {agent_id}, latency: {query_latency_ms}ms, "
+            f"response: {result[:50]}..."
         )
 
         return QueryResponse(
@@ -118,6 +225,18 @@ async def query(request: QueryRequest, manager: AgentManagerDep):
         )
 
     except FileNotFoundError as e:
+        # 记录错误审计日志
+        await repos.audit_logs.log(
+            tenant_id=request.tenant_id,
+            action=AuditAction.ERROR_OCCURRED,
+            session_id=request.session_id,
+            chatbot_id=request.chatbot_id,
+            correlation_id=correlation_id,
+            success=False,
+            error_message=str(e),
+            details={"error_type": "ConfigurationNotFound"},
+        )
+
         logger.error(
             f"Configuration not found - chatbot_id: {request.chatbot_id}, "
             f"tenant_id: {request.tenant_id}, error: {str(e)}"
@@ -132,6 +251,19 @@ async def query(request: QueryRequest, manager: AgentManagerDep):
         )
 
     except Exception as e:
+        # 记录错误审计日志
+        await repos.audit_logs.log(
+            tenant_id=request.tenant_id,
+            action=AuditAction.ERROR_OCCURRED,
+            session_id=request.session_id,
+            chatbot_id=request.chatbot_id,
+            correlation_id=correlation_id,
+            success=False,
+            error_message=str(e),
+            details={"error_type": type(e).__name__},
+            duration_ms=int((time.time() - start_time) * 1000),
+        )
+
         logger.error(
             f"Query failed - session_id: {request.session_id}, error: {str(e)}",
             exc_info=True,
@@ -166,6 +298,7 @@ async def chat_async(
     request: QueryRequest,
     manager: AgentManagerDep,
     task_manager: TaskManagerDep,
+    repos: RepositoryManagerDep,
 ):
     """
     异步聊天接口 - 同 session 新请求取消旧请求
@@ -194,12 +327,35 @@ async def chat_async(
         f"chatbot_id: {request.chatbot_id}, tenant_id: {request.tenant_id}"
     )
 
+    # 预先获取或创建会话
+    session, session_created = await repos.sessions.get_or_create(
+        session_id=request.session_id,
+        tenant_id=request.tenant_id,
+        chatbot_id=request.chatbot_id,
+        customer_id=request.customer_id,
+        config_hash=request.md5_checksum,
+        title=request.session_title,
+        source=request.source or "api",
+        is_preview=request.is_preview,
+        metadata=request.autofill_params,
+    )
+
+    if session_created:
+        await repos.audit_logs.log(
+            tenant_id=request.tenant_id,
+            action=AuditAction.SESSION_CREATED,
+            session_id=request.session_id,
+            chatbot_id=request.chatbot_id,
+            correlation_id=correlation_id,
+            details={"customer_id": request.customer_id, "source": request.source},
+        )
+
     # 定义异步处理函数
     async def _process_chat():
         """后台处理聊天请求"""
         start_time = time.time()
         try:
-            # 获取或创建 Agent
+            # 1. 获取或创建 Agent
             agent = await manager.get_or_create_agent(
                 chatbot_id=request.chatbot_id,
                 tenant_id=request.tenant_id,
@@ -207,29 +363,114 @@ async def chat_async(
                 config_hash=request.md5_checksum or "default",
             )
 
-            # 调用 WorkflowAgent
+            # 获取 Agent 信息
+            agent_info = manager.get_agent_info(request.chatbot_id, request.tenant_id)
+            agent_id = agent_info["agent_id"] if agent_info else None
+            config_hash = agent_info["config_hash"] if agent_info else None
+
+            # 更新会话
+            await repos.sessions.update(
+                request.session_id,
+                agent_id=agent_id,
+                config_hash=config_hash,
+            )
+
+            # 2. 更新 Agent 状态
+            await repos.agent_states.create_or_update(
+                tenant_id=request.tenant_id,
+                chatbot_id=request.chatbot_id,
+                status=AgentStatus.PROCESSING,
+                config_hash=config_hash or "",
+            )
+            await repos.agent_states.add_session(agent_id, request.session_id)
+
+            # 3. 存储用户消息
+            user_message = await repos.messages.create(
+                session_id=request.session_id,
+                tenant_id=request.tenant_id,
+                role=MessageRole.USER,
+                content=request.message,
+                correlation_id=correlation_id,
+            )
+
+            await repos.audit_logs.log(
+                tenant_id=request.tenant_id,
+                action=AuditAction.MESSAGE_RECEIVED,
+                session_id=request.session_id,
+                agent_id=agent_id,
+                chatbot_id=request.chatbot_id,
+                message_id=user_message.message_id,
+                correlation_id=correlation_id,
+                details={"content_length": len(request.message)},
+            )
+
+            # 4. 调用 WorkflowAgent
+            query_start = time.time()
             result = await agent.query(
                 message=request.message,
                 session_id=request.session_id,
             )
+            query_latency_ms = int((time.time() - query_start) * 1000)
 
-            duration = time.time() - start_time
+            # 5. 存储 Agent 响应消息
+            assistant_message = await repos.messages.create(
+                session_id=request.session_id,
+                tenant_id=request.tenant_id,
+                role=MessageRole.ASSISTANT,
+                content=result,
+                correlation_id=correlation_id,
+                parent_message_id=user_message.message_id,
+                latency_ms=query_latency_ms,
+            )
+
+            # 6. 更新统计
+            await repos.sessions.increment_message_count(request.session_id, increment=2)
+            await repos.agent_states.increment_message_count(agent_id, increment=2)
+
+            # 记录审计日志
+            total_duration_ms = int((time.time() - start_time) * 1000)
+            await repos.audit_logs.log(
+                tenant_id=request.tenant_id,
+                action=AuditAction.MESSAGE_SENT,
+                session_id=request.session_id,
+                agent_id=agent_id,
+                chatbot_id=request.chatbot_id,
+                message_id=assistant_message.message_id,
+                correlation_id=correlation_id,
+                details={
+                    "content_length": len(result),
+                    "query_latency_ms": query_latency_ms,
+                },
+                duration_ms=total_duration_ms,
+            )
+
             logger.info(
                 f"chat_async completed - session_id: {request.session_id}, "
                 f"correlation_id: {correlation_id}, "
-                f"duration: {duration:.2f}s, "
+                f"duration: {total_duration_ms}ms, "
                 f"response: {result[:50]}..."
             )
 
-            # TODO: 可以在这里添加回调通知机制
-            # await notify_callback(correlation_id, result, duration)
-
         except Exception as e:
-            duration = time.time() - start_time
+            duration_ms = int((time.time() - start_time) * 1000)
+
+            # 记录错误审计日志
+            await repos.audit_logs.log(
+                tenant_id=request.tenant_id,
+                action=AuditAction.ERROR_OCCURRED,
+                session_id=request.session_id,
+                chatbot_id=request.chatbot_id,
+                correlation_id=correlation_id,
+                success=False,
+                error_message=str(e),
+                details={"error_type": type(e).__name__},
+                duration_ms=duration_ms,
+            )
+
             logger.error(
                 f"chat_async failed - session_id: {request.session_id}, "
                 f"correlation_id: {correlation_id}, "
-                f"duration: {duration:.2f}s, "
+                f"duration: {duration_ms}ms, "
                 f"error: {str(e)}",
                 exc_info=True,
             )
@@ -267,6 +508,7 @@ async def release_session(
     chatbot_id: str,
     tenant_id: str,
     manager: AgentManagerDep,
+    repos: RepositoryManagerDep,
 ):
     """
     释放会话
@@ -281,7 +523,25 @@ async def release_session(
     - Agent 会在空闲超时后自动回收
     """
     try:
+        # 1. 关闭会话
+        session = await repos.sessions.close(session_id)
+
+        # 2. 释放 Agent 会话
         await manager.release_session(chatbot_id, tenant_id, session_id)
+
+        # 3. 更新 Agent 状态
+        agent_id = f"{tenant_id}:{chatbot_id}"
+        await repos.agent_states.remove_session(agent_id, session_id)
+
+        # 4. 记录审计日志
+        await repos.audit_logs.log(
+            tenant_id=tenant_id,
+            action=AuditAction.SESSION_CLOSED,
+            session_id=session_id,
+            agent_id=agent_id,
+            chatbot_id=chatbot_id,
+            details={"message_count": session.message_count if session else 0},
+        )
 
         logger.info(
             f"Session released - session_id: {session_id}, "
@@ -376,6 +636,7 @@ async def delete_agent(
     chatbot_id: str,
     tenant_id: str,
     manager: AgentManagerDep,
+    repos: RepositoryManagerDep,
 ):
     """
     删除 Agent
@@ -401,7 +662,28 @@ async def delete_agent(
                 },
             )
 
+        agent_id = agent_info["agent_id"]
+
+        # 1. 删除 Agent
         await manager.remove_agent(chatbot_id, tenant_id)
+
+        # 2. 更新 Agent 状态为已终止
+        await repos.agent_states.update(
+            agent_id,
+            status=AgentStatus.TERMINATED.value,
+        )
+
+        # 3. 记录审计日志
+        await repos.audit_logs.log(
+            tenant_id=tenant_id,
+            action=AuditAction.AGENT_DESTROYED,
+            agent_id=agent_id,
+            chatbot_id=chatbot_id,
+            details={
+                "session_count": agent_info.get("session_count", 0),
+                "config_hash": agent_info.get("config_hash"),
+            },
+        )
 
         logger.info(
             f"Agent deleted - chatbot_id: {chatbot_id}, tenant_id: {tenant_id}"

@@ -19,13 +19,20 @@ class CorrelationIdFilter(logging.Filter):
     日志过滤器：自动注入 correlation_id
     
     从 contextvars 中获取当前的 correlation_id 并添加到日志记录中。
+    如果没有 correlation_id，则使用 "<main>" 作为默认值。
     """
     
     def filter(self, record: logging.LogRecord) -> bool:
         """为日志记录添加 correlation_id 字段"""
         # 延迟导入避免循环依赖
         from api.core.correlation import get_correlation_id
-        record.correlation_id = get_correlation_id()
+        
+        correlation_id = get_correlation_id()
+        # 如果没有 correlation_id 或为空字符串，使用 "<main>"
+        if not correlation_id or correlation_id == "-":
+            record.correlation_id = "<main>"
+        else:
+            record.correlation_id = correlation_id
         return True
 
 
@@ -63,8 +70,9 @@ def setup_logging(
     time_filename = now.strftime("%H-%M-%S") + ".log"
     log_file = log_path / time_filename
     
-    # 日志格式（包含 correlation_id）
-    log_format = "%(asctime)s - [%(correlation_id)s] - %(name)s - %(levelname)s - %(message)s"
+    # 日志格式：简洁格式 [level] [correlation_id] message
+    # levelname 左对齐，固定宽度 8 字符
+    log_format = "[%(levelname)-8s] [%(correlation_id)s] %(message)s"
     formatter = logging.Formatter(log_format)
     
     # Correlation ID 过滤器
