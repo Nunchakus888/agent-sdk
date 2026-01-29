@@ -4,29 +4,31 @@ FastAPI Web API for Workflow Agent
 主应用入口
 """
 
-import logging
+import asyncio
 import os
 from contextlib import asynccontextmanager
+from typing import Awaitable, Callable
 
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.types import Receive, Scope, Send
 
 from api import __version__
+from api.core import setup_logging, get_logger, setup_middlewares
 from api.routes import router
-from api.dependencies import initialize_agent_manager, shutdown_agent_manager
-
-# =============================================================================
-# 日志配置
-# =============================================================================
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler()],
+from api.dependencies import (
+    initialize_workflow_engine,
+    shutdown_workflow_engine,
+    initialize_agent_manager,
+    shutdown_agent_manager,
+    initialize_task_manager,
+    shutdown_task_manager,
 )
 
-logger = logging.getLogger(__name__)
+# 初始化日志
+log_file_path = setup_logging()
+logger = get_logger(__name__)
+logger.info(f"Log file: {log_file_path}")
 
 
 # =============================================================================
@@ -39,7 +41,7 @@ async def lifespan(app: FastAPI):
     """
     应用生命周期管理
 
-    启动时：初始化 AgentManager
+    启动时：初始化 WorkflowEngine
     关闭时：清理资源
     """
     # 启动
@@ -48,43 +50,102 @@ async def lifespan(app: FastAPI):
     try:
         # 从环境变量读取配置
         config_dir = os.getenv("CONFIG_DIR", "config")
-        idle_timeout = int(os.getenv("AGENT_IDLE_TIMEOUT", "300"))  # 5分钟
-        cleanup_interval = int(os.getenv("AGENT_CLEANUP_INTERVAL", "60"))  # 1分钟
-        enable_llm_parsing = os.getenv("ENABLE_LLM_PARSING", "true").lower() == "true"
+        idle_timeout = int(os.getenv("AGENT_IDLE_TIMEOUT", "300"))
+        cleanup_interval = int(os.getenv("AGENT_CLEANUP_INTERVAL", "60"))
+        max_agents = int(os.getenv("MAX_AGENTS", "100"))
+        agent_ttl = int(os.getenv("AGENT_TTL", "3600"))
 
-        # 初始化 AgentManager
-        manager = await initialize_agent_manager(
+        # MongoDB 配置（可选）
+        enable_mongodb = os.getenv("ENABLE_MONGODB", "false").lower() == "true"
+        mongodb_uri = os.getenv("MONGODB_URI") if enable_mongodb else None
+        mongodb_db = os.getenv("MONGODB_DB", "workflow_agent")
+
+        # 初始化 WorkflowEngine
+        engine = await initialize_workflow_engine(
+            mongodb_uri=mongodb_uri,
+            db_name=mongodb_db,
+            config_dir=config_dir,
+            max_agents=max_agents,
+            agent_ttl=agent_ttl,
+            idle_timeout=idle_timeout,
+            cleanup_interval=cleanup_interval,
+        )
+
+        logger.info(
+            f"WorkflowEngine initialized - "
+            f"mode={'mongodb' if mongodb_uri else 'memory'}, "
+            f"config_dir={config_dir}, "
+            f"max_agents={max_agents}"
+        )
+
+        # 初始化 AgentManager（复用 MongoDB 连接）
+        enable_llm_parsing = os.getenv("ENABLE_LLM_PARSING", "false").lower() == "true"
+        manager = initialize_agent_manager(
             config_dir=config_dir,
             idle_timeout=idle_timeout,
             cleanup_interval=cleanup_interval,
             enable_llm_parsing=enable_llm_parsing,
+            db_name=mongodb_db,
+        )
+        manager.start_cleanup()
+
+        # 获取配置存储类型
+        store_type = manager._config_store.store_type
+        logger.info(
+            f"AgentManager initialized - "
+            f"config_dir={config_dir}, "
+            f"idle_timeout={idle_timeout}s, "
+            f"enable_llm_parsing={enable_llm_parsing}, "
+            f"config_store={store_type}"
         )
 
-        logger.info(
-            f"AgentManager initialized successfully - "
-            f"config_dir: {config_dir}, "
-            f"idle_timeout: {idle_timeout}s, "
-            f"cleanup_interval: {cleanup_interval}s, "
-            f"enable_llm_parsing: {enable_llm_parsing}"
-        )
+        # 初始化 TaskManager（协程任务取消机制）
+        task_manager = initialize_task_manager()
+        logger.info("TaskManager initialized")
 
     except Exception as e:
-        logger.error(f"Failed to initialize AgentManager: {e}", exc_info=True)
+        logger.error(f"Failed to initialize: {e}", exc_info=True)
         raise
 
     yield
 
     # 关闭
     logger.info("Shutting down Workflow Agent API...")
+    await shutdown_task_manager()
     await shutdown_agent_manager()
-    logger.info("AgentManager shutdown complete")
+    await shutdown_workflow_engine()
+    logger.info("Shutdown complete")
+
+
+# =============================================================================
+# AppWrapper - ASGI 异常处理（从 Parlant 移植）
+# =============================================================================
+
+
+class AppWrapper:
+    """
+    ASGI 应用包装器
+
+    FastAPI 内置的异常处理不会捕获 BaseException（如 asyncio.CancelledError）
+    这会导致服务进程以丑陋的 traceback 终止
+    此包装器专门处理 asyncio.CancelledError，使其优雅退出
+    """
+
+    def __init__(self, app: FastAPI) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            return await self.app(scope, receive, send)
+        except asyncio.CancelledError:
+            pass  # 优雅退出，不抛出异常
 
 
 # =============================================================================
 # 应用创建
 # =============================================================================
 
-app = FastAPI(
+_fastapi_app = FastAPI(
     title="Workflow Agent API",
     description="RESTful API for BU Agent SDK Workflow Agent (Multi-tenant, Session-based)",
     version=__version__,
@@ -99,14 +160,7 @@ app = FastAPI(
 # 中间件配置
 # =============================================================================
 
-# CORS 配置
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # 生产环境应限制具体域名
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+setup_middlewares(_fastapi_app)
 
 
 # =============================================================================
@@ -114,7 +168,7 @@ app.add_middleware(
 # =============================================================================
 
 
-@app.exception_handler(Exception)
+@_fastapi_app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
     """全局异常处理"""
     _ = request  # 避免未使用警告
@@ -134,11 +188,11 @@ async def global_exception_handler(request, exc):
 # =============================================================================
 
 # 注册 API 路由
-app.include_router(router, prefix="/api/v1", tags=["Workflow Agent"])
+_fastapi_app.include_router(router, prefix="/api/v1", tags=["Workflow Agent"])
 
 
 # 根路径
-@app.get("/", tags=["Root"])
+@_fastapi_app.get("/", tags=["Root"])
 async def root():
     """API 根路径"""
     return {
@@ -148,6 +202,13 @@ async def root():
         "docs": "/docs",
         "health": "/api/v1/health",
     }
+
+
+# =============================================================================
+# 导出 ASGI 应用（使用 AppWrapper 包装）
+# =============================================================================
+
+app = AppWrapper(_fastapi_app)
 
 
 # =============================================================================

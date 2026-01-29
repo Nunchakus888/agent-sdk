@@ -1,5 +1,5 @@
 """
-API 单元测试 - 优化版
+API 集成测试 - 连接真实运行的服务器
 
 测试覆盖：
 - 多租户查询接口
@@ -7,16 +7,25 @@ API 单元测试 - 优化版
 - 会话管理接口
 - 健康检查接口
 - 错误处理
+
+使用前请先启动服务器：
+    python -m api.main
+
+然后运行测试：
+    pytest tests/test_api_optimized.py -v
 """
 
 import pytest
-from unittest.mock import AsyncMock, Mock, patch, MagicMock
-from fastapi.testclient import TestClient
+import pytest_asyncio
+from httpx import AsyncClient
 
-from api.main import app
-from api.dependencies import get_agent_manager
-from api.agent_manager import AgentManager
-from bu_agent_sdk.tools.action_books import WorkflowConfigSchema
+
+# =============================================================================
+# Configuration
+# =============================================================================
+
+# 真实服务器地址（先启动服务器: python -m api.main）
+BASE_URL = "http://localhost:8000"
 
 
 # =============================================================================
@@ -24,97 +33,11 @@ from bu_agent_sdk.tools.action_books import WorkflowConfigSchema
 # =============================================================================
 
 
-@pytest.fixture
-def test_workflow_config():
-    """Create test workflow configuration."""
-    return WorkflowConfigSchema(
-        instructions="1. Understand needs\n2. Execute action\n3. Provide feedback",
-        need_greeting="Hello! How can I help you?",
-        constraints="Be helpful",
-        tools=[],
-        skills=[],
-        flows=[],
-        system_actions=[],
-        kb_config={"enabled": False},
-        max_iterations=3,
-        iteration_strategy="sop_driven"
-    )
-
-
-@pytest.fixture
-def mock_agent_manager():
-    """Create mock AgentManager for testing."""
-    manager = Mock(spec=AgentManager)
-
-    # Mock get_or_create_agent
-    async def mock_get_or_create_agent(chatbot_id, tenant_id, session_id, md5_checksum=None):
-        mock_agent = Mock()
-
-        async def mock_query(message, session_id):
-            return f"Response to: {message}"
-
-        mock_agent.query = mock_query
-        return mock_agent
-
-    manager.get_or_create_agent = mock_get_or_create_agent
-
-    # Mock release_session
-    async def mock_release_session(chatbot_id, tenant_id, session_id):
-        pass
-
-    manager.release_session = mock_release_session
-
-    # Mock remove_agent
-    async def mock_remove_agent(chatbot_id, tenant_id):
-        pass
-
-    manager.remove_agent = mock_remove_agent
-
-    # Mock get_agent_info
-    def mock_get_agent_info(chatbot_id, tenant_id):
-        return {
-            "agent_id": f"{tenant_id}:{chatbot_id}",
-            "chatbot_id": chatbot_id,
-            "tenant_id": tenant_id,
-            "config_hash": "test_hash_123",
-            "session_count": 2,
-            "created_at": "2026-01-23T10:00:00Z",
-            "last_active_at": "2026-01-23T10:30:00Z",
-            "is_idle": False,
-            "idle_time": 0,
-        }
-
-    manager.get_agent_info = mock_get_agent_info
-
-    # Mock get_stats
-    def mock_get_stats():
-        return {
-            "active_agents": 3,
-            "idle_agents": 1,
-            "active_sessions": 10,
-            "uptime": 3600.5,
-        }
-
-    manager.get_stats = mock_get_stats
-
-    return manager
-
-
-@pytest.fixture
-def client(mock_agent_manager):
-    """Create test client with mocked AgentManager."""
-
-    # Override dependency
-    def override_get_agent_manager():
-        return mock_agent_manager
-
-    app.dependency_overrides[get_agent_manager] = override_get_agent_manager
-
-    with TestClient(app) as test_client:
-        yield test_client
-
-    # Clean up
-    app.dependency_overrides.clear()
+@pytest_asyncio.fixture
+async def client():
+    """Create async HTTP client connecting to real server."""
+    async with AsyncClient(base_url=BASE_URL, timeout=60.0) as ac:
+        yield ac
 
 
 # =============================================================================
@@ -122,9 +45,10 @@ def client(mock_agent_manager):
 # =============================================================================
 
 
-def test_root_endpoint(client):
+@pytest.mark.asyncio
+async def test_root_endpoint(client):
     """Test root endpoint returns welcome message."""
-    response = client.get("/")
+    response = await client.get("/")
 
     assert response.status_code == 200
     data = response.json()
@@ -138,14 +62,15 @@ def test_root_endpoint(client):
 # =============================================================================
 
 
-def test_query_endpoint_success(client):
+@pytest.mark.asyncio
+async def test_query_endpoint_success(client):
     """Test successful query request with full parameters."""
     request_data = {
         "message": "Hello, I need help with my order",
         "customer_id": "cust_123xy",
-        "session_id": "68d510aedff9455e5b019b3e",
+        "session_id": "test_session_001",
         "tenant_id": "dev-test",
-        "chatbot_id": "68d510aedff9455e5b019b3e",
+        "chatbot_id": "test_chatbot_001",
         "md5_checksum": "1234567890",
         "source": "bacmk_ui",
         "is_preview": False,
@@ -153,71 +78,75 @@ def test_query_endpoint_success(client):
         "session_title": "Order Inquiry"
     }
 
-    response = client.post("/api/v1/query", json=request_data)
+    response = await client.post("/api/v1/query", json=request_data)
 
     assert response.status_code == 200
     data = response.json()
-    assert data["session_id"] == "68d510aedff9455e5b019b3e"
+    assert data["session_id"] == "test_session_001"
     assert data["status"] == "success"
-    assert "Response to: Hello, I need help with my order" in data["message"]
+    assert data["message"]  # Should have a response
     assert data["agent_id"] is not None
 
 
-def test_query_endpoint_minimal_params(client):
+@pytest.mark.asyncio
+async def test_query_endpoint_minimal_params(client):
     """Test query with only required parameters."""
     request_data = {
         "message": "Hello",
-        "session_id": "test_session_001",
-        "chatbot_id": "test_chatbot",
+        "session_id": "test_session_002",
+        "chatbot_id": "test_chatbot_002",
         "tenant_id": "test_tenant"
     }
 
-    response = client.post("/api/v1/query", json=request_data)
+    response = await client.post("/api/v1/query", json=request_data)
 
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "success"
 
 
-def test_query_endpoint_missing_required_field(client):
+@pytest.mark.asyncio
+async def test_query_endpoint_missing_required_field(client):
     """Test query with missing required field."""
     request_data = {
         "message": "Hello",
-        "session_id": "test_session_002",
+        "session_id": "test_session_003",
         "chatbot_id": "test_chatbot"
         # tenant_id is missing
     }
 
-    response = client.post("/api/v1/query", json=request_data)
+    response = await client.post("/api/v1/query", json=request_data)
 
     assert response.status_code == 422  # Validation error
 
 
-def test_query_endpoint_empty_message(client):
+@pytest.mark.asyncio
+async def test_query_endpoint_empty_message(client):
     """Test query with empty message."""
     request_data = {
         "message": "",
-        "session_id": "test_session_003",
+        "session_id": "test_session_004",
         "chatbot_id": "test_chatbot",
         "tenant_id": "test_tenant"
     }
 
-    response = client.post("/api/v1/query", json=request_data)
+    response = await client.post("/api/v1/query", json=request_data)
 
     assert response.status_code == 422  # Validation error (min_length=1)
 
 
-def test_query_endpoint_with_preview_mode(client):
+@pytest.mark.asyncio
+async def test_query_endpoint_with_preview_mode(client):
     """Test query with preview mode enabled."""
     request_data = {
         "message": "Test preview",
-        "session_id": "preview_session",
-        "chatbot_id": "test_chatbot",
+        "session_id": "preview_session_001",
+        "chatbot_id": "test_chatbot_preview",
         "tenant_id": "test_tenant",
         "is_preview": True
     }
 
-    response = client.post("/api/v1/query", json=request_data)
+    response = await client.post("/api/v1/query", json=request_data)
 
     assert response.status_code == 200
     data = response.json()
@@ -229,21 +158,31 @@ def test_query_endpoint_with_preview_mode(client):
 # =============================================================================
 
 
-def test_release_session_success(client):
-    """Test releasing a session."""
-    session_id = "test_session_100"
-    chatbot_id = "test_chatbot"
-    tenant_id = "test_tenant"
+@pytest.mark.asyncio
+async def test_release_session_success(client):
+    """Test releasing a session after creating it."""
+    # First, create a session by querying
+    query_request = {
+        "message": "Hello",
+        "session_id": "session_to_release",
+        "chatbot_id": "chatbot_release_test",
+        "tenant_id": "tenant_release_test"
+    }
+    await client.post("/api/v1/query", json=query_request)
 
-    response = client.delete(
-        f"/api/v1/session/{session_id}",
-        params={"chatbot_id": chatbot_id, "tenant_id": tenant_id}
+    # Now release the session
+    response = await client.delete(
+        "/api/v1/session/session_to_release",
+        params={
+            "chatbot_id": "chatbot_release_test",
+            "tenant_id": "tenant_release_test"
+        }
     )
 
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "released"
-    assert data["session_id"] == session_id
+    assert data["session_id"] == "session_to_release"
 
 
 # =============================================================================
@@ -251,12 +190,23 @@ def test_release_session_success(client):
 # =============================================================================
 
 
-def test_get_agent_info_success(client):
-    """Test getting agent information."""
-    chatbot_id = "test_chatbot"
-    tenant_id = "test_tenant"
+@pytest.mark.asyncio
+async def test_get_agent_info_success(client):
+    """Test getting agent information after creating it."""
+    chatbot_id = "chatbot_info_test"
+    tenant_id = "tenant_info_test"
 
-    response = client.get(
+    # First, create an agent by querying
+    query_request = {
+        "message": "Hello",
+        "session_id": "session_for_agent_info",
+        "chatbot_id": chatbot_id,
+        "tenant_id": tenant_id
+    }
+    await client.post("/api/v1/query", json=query_request)
+
+    # Now get agent info
+    response = await client.get(
         f"/api/v1/agent/{chatbot_id}",
         params={"tenant_id": tenant_id}
     )
@@ -266,17 +216,15 @@ def test_get_agent_info_success(client):
     assert data["agent_id"] == f"{tenant_id}:{chatbot_id}"
     assert data["chatbot_id"] == chatbot_id
     assert data["tenant_id"] == tenant_id
-    assert data["session_count"] == 2
+    assert data["session_count"] >= 1
 
 
-def test_get_agent_info_not_found(client, mock_agent_manager):
+@pytest.mark.asyncio
+async def test_get_agent_info_not_found(client):
     """Test getting non-existent agent."""
-    # Mock to return None
-    mock_agent_manager.get_agent_info = lambda chatbot_id, tenant_id: None
-
-    response = client.get(
-        "/api/v1/agent/nonexistent",
-        params={"tenant_id": "test_tenant"}
+    response = await client.get(
+        "/api/v1/agent/nonexistent_chatbot",
+        params={"tenant_id": "nonexistent_tenant"}
     )
 
     assert response.status_code == 404
@@ -284,12 +232,23 @@ def test_get_agent_info_not_found(client, mock_agent_manager):
     assert "detail" in data
 
 
-def test_delete_agent_success(client):
-    """Test deleting an agent."""
-    chatbot_id = "test_chatbot"
-    tenant_id = "test_tenant"
+@pytest.mark.asyncio
+async def test_delete_agent_success(client):
+    """Test deleting an agent after creating it."""
+    chatbot_id = "chatbot_delete_test"
+    tenant_id = "tenant_delete_test"
 
-    response = client.delete(
+    # First, create an agent by querying
+    query_request = {
+        "message": "Hello",
+        "session_id": "session_for_delete",
+        "chatbot_id": chatbot_id,
+        "tenant_id": tenant_id
+    }
+    await client.post("/api/v1/query", json=query_request)
+
+    # Now delete the agent
+    response = await client.delete(
         f"/api/v1/agent/{chatbot_id}",
         params={"tenant_id": tenant_id}
     )
@@ -301,14 +260,12 @@ def test_delete_agent_success(client):
     assert data["tenant_id"] == tenant_id
 
 
-def test_delete_agent_not_found(client, mock_agent_manager):
+@pytest.mark.asyncio
+async def test_delete_agent_not_found(client):
     """Test deleting non-existent agent."""
-    # Mock to return None
-    mock_agent_manager.get_agent_info = lambda chatbot_id, tenant_id: None
-
-    response = client.delete(
-        "/api/v1/agent/nonexistent",
-        params={"tenant_id": "test_tenant"}
+    response = await client.delete(
+        "/api/v1/agent/nonexistent_chatbot",
+        params={"tenant_id": "nonexistent_tenant"}
     )
 
     assert response.status_code == 404
@@ -319,17 +276,18 @@ def test_delete_agent_not_found(client, mock_agent_manager):
 # =============================================================================
 
 
-def test_health_check(client):
+@pytest.mark.asyncio
+async def test_health_check(client):
     """Test health check endpoint."""
-    response = client.get("/api/v1/health")
+    response = await client.get("/api/v1/health")
 
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "healthy"
-    assert data["active_sessions"] == 10
-    assert data["active_agents"] == 3
+    assert "active_sessions" in data
+    assert "active_agents" in data
     assert "version" in data
-    assert data["uptime"] == 3600.5
+    assert "uptime" in data
 
 
 # =============================================================================
@@ -337,28 +295,31 @@ def test_health_check(client):
 # =============================================================================
 
 
-def test_invalid_json_request(client):
+@pytest.mark.asyncio
+async def test_invalid_json_request(client):
     """Test request with invalid JSON."""
-    response = client.post(
+    response = await client.post(
         "/api/v1/query",
-        data="invalid json",
+        content="invalid json",
         headers={"Content-Type": "application/json"}
     )
 
     assert response.status_code == 422
 
 
-def test_wrong_http_method(client):
+@pytest.mark.asyncio
+async def test_wrong_http_method(client):
     """Test using wrong HTTP method."""
     # GET instead of POST for query
-    response = client.get("/api/v1/query")
+    response = await client.get("/api/v1/query")
 
     assert response.status_code == 405  # Method Not Allowed
 
 
-def test_invalid_endpoint(client):
+@pytest.mark.asyncio
+async def test_invalid_endpoint(client):
     """Test accessing non-existent endpoint."""
-    response = client.get("/api/v1/nonexistent")
+    response = await client.get("/api/v1/nonexistent")
 
     assert response.status_code == 404
 
@@ -368,33 +329,37 @@ def test_invalid_endpoint(client):
 # =============================================================================
 
 
-def test_multi_tenant_isolation(client):
+@pytest.mark.asyncio
+async def test_multi_tenant_isolation(client):
     """Test that different tenants are isolated."""
     # Tenant A
     request_a = {
         "message": "Hello from tenant A",
-        "session_id": "session_a",
-        "chatbot_id": "chatbot_001",
+        "session_id": "session_tenant_a",
+        "chatbot_id": "shared_chatbot",
         "tenant_id": "tenant_a"
     }
 
-    response_a = client.post("/api/v1/query", json=request_a)
+    response_a = await client.post("/api/v1/query", json=request_a)
     assert response_a.status_code == 200
 
     # Tenant B (same chatbot_id, different tenant)
     request_b = {
         "message": "Hello from tenant B",
-        "session_id": "session_b",
-        "chatbot_id": "chatbot_001",
+        "session_id": "session_tenant_b",
+        "chatbot_id": "shared_chatbot",
         "tenant_id": "tenant_b"
     }
 
-    response_b = client.post("/api/v1/query", json=request_b)
+    response_b = await client.post("/api/v1/query", json=request_b)
     assert response_b.status_code == 200
 
     # Both should succeed independently
     assert response_a.json()["status"] == "success"
     assert response_b.json()["status"] == "success"
+
+    # They should have different agent_ids
+    assert response_a.json()["agent_id"] != response_b.json()["agent_id"]
 
 
 # =============================================================================
@@ -402,30 +367,31 @@ def test_multi_tenant_isolation(client):
 # =============================================================================
 
 
-def test_config_change_detection(client):
+@pytest.mark.asyncio
+async def test_config_change_detection(client):
     """Test configuration change detection via md5_checksum."""
     # First request with checksum
     request_1 = {
         "message": "Hello",
-        "session_id": "session_001",
-        "chatbot_id": "chatbot_001",
-        "tenant_id": "tenant_001",
+        "session_id": "session_config_1",
+        "chatbot_id": "chatbot_config_test",
+        "tenant_id": "tenant_config_test",
         "md5_checksum": "old_hash_123"
     }
 
-    response_1 = client.post("/api/v1/query", json=request_1)
+    response_1 = await client.post("/api/v1/query", json=request_1)
     assert response_1.status_code == 200
 
     # Second request with different checksum (config changed)
     request_2 = {
         "message": "Hello again",
-        "session_id": "session_002",
-        "chatbot_id": "chatbot_001",
-        "tenant_id": "tenant_001",
+        "session_id": "session_config_2",
+        "chatbot_id": "chatbot_config_test",
+        "tenant_id": "tenant_config_test",
         "md5_checksum": "new_hash_456"
     }
 
-    response_2 = client.post("/api/v1/query", json=request_2)
+    response_2 = await client.post("/api/v1/query", json=request_2)
     assert response_2.status_code == 200
 
 
@@ -434,58 +400,58 @@ def test_config_change_detection(client):
 # =============================================================================
 
 
-def test_complete_workflow(client):
+@pytest.mark.asyncio
+async def test_complete_workflow(client):
     """Test complete workflow: query -> get agent -> release session -> delete agent."""
     chatbot_id = "workflow_chatbot"
     tenant_id = "workflow_tenant"
     session_id = "workflow_session"
 
     # Step 1: Query
-    query_response = client.post("/api/v1/query", json={
+    query_response = await client.post("/api/v1/query", json={
         "message": "Hello",
         "session_id": session_id,
         "chatbot_id": chatbot_id,
         "tenant_id": tenant_id
     })
     assert query_response.status_code == 200
+    assert query_response.json()["status"] == "success"
 
     # Step 2: Get agent info
-    agent_response = client.get(
+    agent_response = await client.get(
         f"/api/v1/agent/{chatbot_id}",
         params={"tenant_id": tenant_id}
     )
     assert agent_response.status_code == 200
+    assert agent_response.json()["session_count"] >= 1
 
     # Step 3: Release session
-    release_response = client.delete(
+    release_response = await client.delete(
         f"/api/v1/session/{session_id}",
         params={"chatbot_id": chatbot_id, "tenant_id": tenant_id}
     )
     assert release_response.status_code == 200
 
     # Step 4: Delete agent
-    delete_response = client.delete(
+    delete_response = await client.delete(
         f"/api/v1/agent/{chatbot_id}",
         params={"tenant_id": tenant_id}
     )
     assert delete_response.status_code == 200
 
 
-def test_multiple_concurrent_queries(client):
-    """Test handling multiple queries concurrently."""
-    requests = [
-        {
-            "message": f"Message {i}",
-            "session_id": f"session_{i}",
-            "chatbot_id": "test_chatbot",
-            "tenant_id": "test_tenant"
-        }
-        for i in range(5)
-    ]
-
+@pytest.mark.asyncio
+async def test_multiple_sequential_queries(client):
+    """Test handling multiple queries sequentially."""
     responses = []
-    for req in requests:
-        response = client.post("/api/v1/query", json=req)
+    for i in range(5):
+        request = {
+            "message": f"Message {i}",
+            "session_id": f"multi_session_{i}",
+            "chatbot_id": "multi_chatbot",
+            "tenant_id": "multi_tenant"
+        }
+        response = await client.post("/api/v1/query", json=request)
         responses.append(response)
 
     # All should succeed
@@ -499,9 +465,10 @@ def test_multiple_concurrent_queries(client):
 # =============================================================================
 
 
-def test_openapi_schema_available(client):
+@pytest.mark.asyncio
+async def test_openapi_schema_available(client):
     """Test OpenAPI schema is available."""
-    response = client.get("/openapi.json")
+    response = await client.get("/openapi.json")
 
     assert response.status_code == 200
     schema = response.json()
@@ -510,17 +477,19 @@ def test_openapi_schema_available(client):
     assert "paths" in schema
 
 
-def test_swagger_docs_available(client):
+@pytest.mark.asyncio
+async def test_swagger_docs_available(client):
     """Test Swagger UI is available."""
-    response = client.get("/docs")
+    response = await client.get("/docs")
 
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
 
 
-def test_redoc_docs_available(client):
+@pytest.mark.asyncio
+async def test_redoc_docs_available(client):
     """Test ReDoc UI is available."""
-    response = client.get("/redoc")
+    response = await client.get("/redoc")
 
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
@@ -588,3 +557,57 @@ def test_agent_stats_model():
 
     assert stats.agent_id == "tenant_001:chatbot_001"
     assert stats.session_count == 5
+
+
+# =============================================================================
+# Real Agent Manager Tests
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_agent_manager_stats(client):
+    """Test AgentManager statistics are tracked correctly."""
+    # Create some agents by querying
+    for i in range(3):
+        await client.post("/api/v1/query", json={
+            "message": f"Hello {i}",
+            "session_id": f"stats_session_{i}",
+            "chatbot_id": f"stats_chatbot_{i}",
+            "tenant_id": "stats_tenant"
+        })
+
+    # Check health endpoint shows the stats
+    response = await client.get("/api/v1/health")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["active_agents"] >= 3
+    assert data["active_sessions"] >= 3
+
+
+@pytest.mark.asyncio
+async def test_same_session_multiple_queries(client):
+    """Test multiple queries in the same session."""
+    chatbot_id = "same_session_chatbot"
+    tenant_id = "same_session_tenant"
+    session_id = "same_session_test"
+
+    # First query
+    response_1 = await client.post("/api/v1/query", json={
+        "message": "First message",
+        "session_id": session_id,
+        "chatbot_id": chatbot_id,
+        "tenant_id": tenant_id
+    })
+    assert response_1.status_code == 200
+
+    # Second query in same session
+    response_2 = await client.post("/api/v1/query", json={
+        "message": "Second message",
+        "session_id": session_id,
+        "chatbot_id": chatbot_id,
+        "tenant_id": tenant_id
+    })
+    assert response_2.status_code == 200
+
+    # Both should use the same agent
+    assert response_1.json()["agent_id"] == response_2.json()["agent_id"]

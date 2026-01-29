@@ -2,22 +2,34 @@
 Agent 管理器
 
 负责 Agent 的创建、缓存、生命周期管理和自动回收
-支持配置文件的 LLM 解析和缓存复用
+支持配置文件的 LLM 解析和持久化存储
+
+架构设计：
+- Service 级别：AgentManager 持有 ConfigStore（DB 抽象）
+- Agent 级别：WorkflowAgent 只接收 config，不感知存储
+- Hash 作为主键，客户端传入直接比对
 """
 
 import asyncio
-import hashlib
 import json
 import logging
 import os
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from bu_agent_sdk.agent.workflow_agent import WorkflowAgent
 from bu_agent_sdk.config import load_config, get_llm_decision_llm
-from bu_agent_sdk.tools.action_books import WorkflowConfigSchema
+from bu_agent_sdk.tools.actions import WorkflowConfigSchema
+
+from api.services.config_store import (
+    ConfigStore,
+    StoredConfig,
+    MemoryConfigStore,
+    MongoConfigStore,
+    create_config_store,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -104,57 +116,59 @@ class AgentManager:
 
     职责：
     1. 根据 chatbot_id + tenant_id 创建和缓存 Agent
-    2. 管理配置文件的 LLM 解析和缓存
+    2. 管理配置的解析和持久化存储
     3. 管理 Agent 的生命周期
     4. 自动回收空闲 Agent
-    5. 配置文件变更检测和热重载
+    5. 配置变更检测（基于 hash 比对）
+    
+    存储架构：
+    - ConfigStore: 配置持久化（Memory/MongoDB）
+    - Agent Cache: 运行时 Agent 实例缓存
     """
 
     def __init__(
         self,
         config_dir: str = "config",
-        idle_timeout: int = 300,  # 5分钟无会话自动回收
-        cleanup_interval: int = 60,  # 每分钟检查一次
-        enable_llm_parsing: bool = False,  # 是否启用 LLM 配置解析
+        idle_timeout: int = 300,
+        cleanup_interval: int = 60,
+        enable_llm_parsing: bool = False,
+        mongo_db: Any | None = None,
     ):
         self.config_dir = Path(config_dir)
         self.idle_timeout = idle_timeout
         self.cleanup_interval = cleanup_interval
         self.enable_llm_parsing = enable_llm_parsing
 
-        # Agent 缓存: {agent_key: AgentInfo}
+        # Agent 缓存（运行时实例）
         self._agents: Dict[str, AgentInfo] = {}
 
-        # 配置缓存: {config_hash: ParsedConfig}
-        self._config_cache: Dict[str, ParsedConfig] = {}
+        # 配置存储（用完即走，无额外缓存）
+        self._config_store = create_config_store(mongo_db)
 
-        # 应用配置（LLM、存储等）
+        # 应用配置
         self._app_config = load_config()
-
-        # 启动时间
         self._start_time = time.time()
-
-        # 清理任务
         self._cleanup_task: Optional[asyncio.Task] = None
 
         logger.info(
             f"AgentManager initialized: "
             f"config_dir={config_dir}, "
             f"idle_timeout={idle_timeout}s, "
-            f"cleanup_interval={cleanup_interval}s, "
-            f"enable_llm_parsing={enable_llm_parsing}"
+            f"config_store={self._config_store.store_type}"
         )
 
     @staticmethod
     def _get_agent_key(chatbot_id: str, tenant_id: str) -> str:
         """生成 Agent 缓存键"""
         return f"{tenant_id}:{chatbot_id}"
-
-    @staticmethod
-    def _compute_config_hash(raw_config: dict) -> str:
-        """计算原始配置的哈希值"""
-        config_str = json.dumps(raw_config, sort_keys=True)
-        return hashlib.md5(config_str.encode()).hexdigest()
+    
+    def _load_raw_config(self, chatbot_id: str, tenant_id: str) -> dict:
+        """加载原始配置文件"""
+        # TODO: 支持动态配置路径
+        config_path = "docs/configs/sop.json"
+        
+        with open(config_path, "r", encoding="utf-8") as f:
+            return json.load(f)
 
     def _get_config_path(self, chatbot_id: str, tenant_id: str) -> Path:
         """获取配置文件路径"""
@@ -344,7 +358,7 @@ class AgentManager:
         构建配置验证和增强的 prompt
 
         职责：
-        1. 增强现有配置字段（skills, tools, flows）
+        1. 增强 instruction 内容
         2. 从 instruction 中推理提取：timers, need_greeting, constraints
         3. 生成结构化的 instructions（整合 basic_settings 和 instruction）
         4. 安全性检查和越狱防护
@@ -352,13 +366,13 @@ class AgentManager:
         # 1. 提取配置中已存在的字段
         basic_settings = raw_config.get("basic_settings", {})
         instruction_content = basic_settings.get("instruction", "")
-        skills = raw_config.get("skills", [])
+        skills = raw_config.get("action_books", [])
         flows = raw_config.get("flows", [])
 
         # 兼容 system_tools 和 tools 两种命名
         tools = raw_config.get("tools") or raw_config.get("system_tools", [])
         system_actions = raw_config.get("system_actions", [])
-        action_books = raw_config.get("action_books", [])
+        agent_actions = raw_config.get("agent_actions", [])
 
         # 2. 构建输入配置 JSON
         input_config = {
@@ -508,27 +522,8 @@ Analyze the instruction for **boundaries, restrictions, and rules** (usually in 
 
 ---
 
-### TASK 5: Enhance Skills
 
-For each skill, enhance the `condition` field with multi-indicator triggers:
-
-**Before**:
-```json
-{{"condition": "Wants to schedule a demo", "action": "Save info", "tools": ["save_customer_information"]}}
-```
-
-**After**:
-```json
-{{
-  "condition": "1. Explicitly requests demo/meeting 2. Asks 'can I see it in action' 3. Mentions scheduling/calendar 4. Wants to try product 5. Asks for sales contact 6. Voluntarily provides contact info",
-  "action": "Persuade customer to provide required information (name, email, country), then save using save_customer_information tool",
-  "tools": ["save_customer_information"]
-}}
-```
-
----
-
-### TASK 6: Validate Tools & Flows
+### TASK 5: Validate Tools & Flows
 
 - Preserve all endpoint configurations (url, method, headers, body)
 - Enhance descriptions for clarity
@@ -543,20 +538,11 @@ Return **ONLY valid JSON** (no markdown code blocks, no explanations):
 ```json
 {{
   "instructions": "Markdown-structured instructions (Task 1 output)",
-  "skills": [
-    {{
-      "condition": "Enhanced multi-indicator condition",
-      "action": "Clear action description",
-      "tools": ["tool_name"]
-    }}
-  ],
   "tools": [...],
   "flows": [...],
   "timers": [...] or null,
   "need_greeting": "Extracted greeting message" or "",
-  "constraints": "Extracted constraints list" or null,
-  "system_actions": {json.dumps(system_actions)},
-  "action_books": {json.dumps(action_books)}
+  "constraints": "Extracted constraints list" or null
 }}
 ```
 
@@ -669,56 +655,46 @@ Now analyze the configuration and instruction, then provide your JSON output."""
         return clean_value(config)
 
     async def _get_or_parse_config(
-        self, chatbot_id: str, tenant_id: str, md5_checksum: Optional[str] = None
+        self, chatbot_id: str, tenant_id: str, config_hash: str, raw_config: dict
     ) -> ParsedConfig:
         """
-        获取或解析配置
-
-        优先从缓存中获取，如果缓存不存在或配置变更，则重新解析
-
+        获取或解析配置（用完即走）
+        
+        流程：Store 有则用，无则解析并存储
+        
         Args:
             chatbot_id: Chatbot ID
             tenant_id: 租户 ID
-            md5_checksum: 客户端提供的配置哈希（可选）
-
+            config_hash: 配置哈希（客户端传入）
+            raw_config: 原始配置数据
+        
         Returns:
-            ParsedConfig: 解析后的配置对象
+            ParsedConfig 对象
         """
-        # 加载原始配置文件
-        # config_path = self._get_config_path(chatbot_id, tenant_id)
-        config_path = "docs/configs/sop.json"  # 临时使用示例配置
-
-        logger.debug(f"Loading config from: {config_path}")
-
-        with open(config_path, "r", encoding="utf-8") as f:
-            raw_config = json.load(f)
-
-        # 计算配置哈希
-        config_hash = self._compute_config_hash(raw_config)
-
-        # 如果客户端提供了 md5_checksum，使用客户端的值
-        if md5_checksum:
-            config_hash = md5_checksum
-
-        # 检查缓存
-        if config_hash in self._config_cache:
-            logger.debug(f"Config cache hit: {config_hash}")
-            parsed_config = self._config_cache[config_hash]
-            parsed_config.access()
-            return parsed_config
-
-        # 缓存未命中，解析配置
-        logger.info(f"Config cache miss: {config_hash}, parsing...")
+        # 1. 查询存储
+        stored = await self._config_store.get(config_hash)
+        if stored:
+            logger.debug(f"Config found: {config_hash}")
+            workflow_config = WorkflowConfigSchema(**stored.parsed_config)
+            return ParsedConfig(
+                config=workflow_config,
+                config_hash=config_hash,
+                raw_config=stored.raw_config,
+            )
+        
+        # 2. 解析并存储
+        logger.info(f"Config not found: {config_hash}, parsing...")
         parsed_config = await self._parse_config(raw_config, config_hash)
-
-        # 缓存解析结果
-        self._config_cache[config_hash] = parsed_config
-
-        logger.info(
-            f"Config cached: hash={config_hash}, "
-            f"total_cached_configs={len(self._config_cache)}"
-        )
-
+        
+        await self._config_store.save(StoredConfig(
+            config_hash=config_hash,
+            tenant_id=tenant_id,
+            chatbot_id=chatbot_id,
+            raw_config=raw_config,
+            parsed_config=parsed_config.config.model_dump(),
+        ))
+        
+        logger.info(f"Config stored: {config_hash} ({self._config_store.store_type})")
         return parsed_config
 
     async def _create_agent(
@@ -767,25 +743,31 @@ Now analyze the configuration and instruction, then provide your JSON output."""
         chatbot_id: str,
         tenant_id: str,
         session_id: str,
-        md5_checksum: Optional[str] = None,
+        config_hash: str,
+        raw_config: dict | None = None,
     ) -> WorkflowAgent:
         """
         获取或创建 Agent
-
+        
         Args:
             chatbot_id: Chatbot ID
             tenant_id: 租户 ID
             session_id: 会话 ID
-            md5_checksum: 配置文件 MD5 校验和（用于检测配置变更）
-
+            config_hash: 配置哈希（必须，由客户端提供）
+            raw_config: 原始配置（可选，未提供时从文件加载）
+        
         Returns:
             WorkflowAgent 实例
         """
         agent_key = self._get_agent_key(chatbot_id, tenant_id)
-
+        
+        # 加载原始配置（如果未提供）
+        if raw_config is None:
+            raw_config = self._load_raw_config(chatbot_id, tenant_id)
+        
         # 获取或解析配置
         parsed_config = await self._get_or_parse_config(
-            chatbot_id, tenant_id, md5_checksum
+            chatbot_id, tenant_id, config_hash, raw_config
         )
 
         # 检查是否已存在 Agent
@@ -917,28 +899,10 @@ Now analyze the configuration and instruction, then provide your JSON output."""
             "uptime": time.time() - self._start_time,
         }
 
-    def get_config_cache_stats(self) -> dict:
-        """获取配置缓存统计信息"""
-        total_access = sum(
-            config.access_count for config in self._config_cache.values()
-        )
-
+    def get_config_store_info(self) -> dict:
+        """获取配置存储信息"""
         return {
-            "cached_configs": len(self._config_cache),
-            "total_access_count": total_access,
-            "configs": [
-                {
-                    "config_hash": config.config_hash,
-                    "access_count": config.access_count,
-                    "created_at": datetime.fromtimestamp(
-                        config.created_at
-                    ).isoformat(),
-                    "last_access_at": datetime.fromtimestamp(
-                        config.last_access_at
-                    ).isoformat(),
-                }
-                for config in self._config_cache.values()
-            ],
+            "store_type": self._config_store.store_type,
         }
 
     def get_agent_info(self, chatbot_id: str, tenant_id: str) -> Optional[Dict]:

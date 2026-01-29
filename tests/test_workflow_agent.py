@@ -13,7 +13,7 @@ import pytest
 from unittest.mock import AsyncMock, Mock, patch
 
 from bu_agent_sdk.agent.workflow_agent import WorkflowAgent
-from bu_agent_sdk.tools.action_books import (
+from bu_agent_sdk.tools.actions import (
     WorkflowConfigSchema,
     SkillDefinition,
     FlowDefinition,

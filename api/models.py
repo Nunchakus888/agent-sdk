@@ -157,3 +157,59 @@ class AgentStats(BaseModel):
                 "last_active_at": "2026-01-23T10:30:00Z"
             }
         }
+
+
+# =============================================================================
+# 统一响应格式（从 Parlant ChatResponseDTO 移植）
+# =============================================================================
+
+
+class ChatResponseDTO(BaseModel):
+    """
+    统一响应格式 - 从 Parlant 移植
+
+    用于 chat_async 等 RESTful API 的标准响应格式
+    """
+
+    status: int = Field(default=200, description="HTTP 状态码")
+    code: int = Field(default=0, description="业务状态码（0=成功）")
+    message: str = Field(default="success", description="状态消息")
+    data: Optional[Any] = Field(default=None, description="响应数据")
+    correlation_id: Optional[str] = Field(default=None, description="关联ID")
+    duration: Optional[float] = Field(default=None, description="处理耗时（秒）")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "status": 200,
+                "code": 0,
+                "message": "success",
+                "data": {
+                    "session_id": "68d510aedff9455e5b019b3e",
+                    "response": "您的订单正在处理中"
+                },
+                "correlation_id": "R1234567890",
+                "duration": 1.25
+            }
+        }
+
+
+class ChatAsyncResponse(BaseModel):
+    """chat_async 异步响应"""
+
+    status: int = Field(default=202, description="HTTP 状态码（202=已接受）")
+    code: int = Field(default=0, description="业务状态码")
+    message: str = Field(default="processing", description="状态消息")
+    correlation_id: str = Field(..., description="关联ID，用于追踪请求")
+    session_id: str = Field(..., description="会话ID")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "status": 202,
+                "code": 0,
+                "message": "processing",
+                "correlation_id": "R1234567890",
+                "session_id": "68d510aedff9455e5b019b3e"
+            }
+        }

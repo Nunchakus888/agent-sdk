@@ -11,7 +11,7 @@ import pytest
 from unittest.mock import AsyncMock, Mock
 
 from bu_agent_sdk.tools.intent_matcher import IntentMatcher, IntentMatchResult
-from bu_agent_sdk.tools.action_books import (
+from bu_agent_sdk.tools.actions import (
     ActionType,
     FlowDefinition,
     SkillDefinition,

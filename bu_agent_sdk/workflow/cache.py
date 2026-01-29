@@ -11,7 +11,7 @@ from typing import Protocol
 
 from pydantic import BaseModel
 
-from bu_agent_sdk.tools.action_books import WorkflowConfigSchema
+from bu_agent_sdk.tools.actions import WorkflowConfigSchema
 
 
 class CachedPlan(BaseModel):

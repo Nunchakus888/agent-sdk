@@ -5,6 +5,7 @@ API 路由模块
 """
 
 import logging
+import time
 from fastapi import APIRouter, HTTPException, status
 
 from api.models import (
@@ -14,8 +15,10 @@ from api.models import (
     HealthResponse,
     ErrorResponse,
     AgentStats,
+    ChatAsyncResponse,
 )
-from api.dependencies import AgentManagerDep
+from api.dependencies import AgentManagerDep, TaskManagerDep
+from api.core.correlation import generate_request_id
 
 logger = logging.getLogger(__name__)
 
@@ -82,11 +85,12 @@ async def query(request: QueryRequest, manager: AgentManagerDep):
         )
 
         # 获取或创建 Agent
+        # config_hash 由客户端提供，用于配置变更检测
         agent = await manager.get_or_create_agent(
             chatbot_id=request.chatbot_id,
             tenant_id=request.tenant_id,
             session_id=request.session_id,
-            md5_checksum=request.md5_checksum,
+            config_hash=request.md5_checksum or "default",
         )
 
         # 调用 WorkflowAgent
@@ -140,6 +144,109 @@ async def query(request: QueryRequest, manager: AgentManagerDep):
                 "session_id": request.session_id,
             },
         )
+
+
+# =============================================================================
+# 异步聊天接口（从 Parlant chat_async 移植）
+# =============================================================================
+
+
+@router.post(
+    "/chat_async",
+    response_model=ChatAsyncResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    responses={
+        500: {"model": ErrorResponse, "description": "Internal Server Error"},
+        503: {"description": "Service Unavailable - Request Cancelled"},
+    },
+    summary="异步聊天接口",
+    description="发送消息到 Workflow Agent，同 session 新请求会取消旧请求",
+)
+async def chat_async(
+    request: QueryRequest,
+    manager: AgentManagerDep,
+    task_manager: TaskManagerDep,
+):
+    """
+    异步聊天接口 - 同 session 新请求取消旧请求
+
+    **核心特性**：
+    - 同一 session_id 的新请求会自动取消正在处理的旧请求
+    - 旧请求收到 CancelledError，返回 503 状态码
+    - 新请求立即返回 202 Accepted，后台异步处理
+
+    **使用场景**：
+    - 用户快速连续发送消息
+    - 用户中途修改问题
+    - 需要"打断"当前对话
+
+    **工作流程**：
+    1. 生成 correlation_id 用于追踪
+    2. 使用 TaskManager.restart() 取消同 session 旧任务
+    3. 立即返回 202 Accepted
+    4. 后台异步执行查询
+    """
+    correlation_id = f"R{generate_request_id()}"
+
+    logger.info(
+        f"chat_async request - session_id: {request.session_id}, "
+        f"correlation_id: {correlation_id}, "
+        f"chatbot_id: {request.chatbot_id}, tenant_id: {request.tenant_id}"
+    )
+
+    # 定义异步处理函数
+    async def _process_chat():
+        """后台处理聊天请求"""
+        start_time = time.time()
+        try:
+            # 获取或创建 Agent
+            agent = await manager.get_or_create_agent(
+                chatbot_id=request.chatbot_id,
+                tenant_id=request.tenant_id,
+                session_id=request.session_id,
+                config_hash=request.md5_checksum or "default",
+            )
+
+            # 调用 WorkflowAgent
+            result = await agent.query(
+                message=request.message,
+                session_id=request.session_id,
+            )
+
+            duration = time.time() - start_time
+            logger.info(
+                f"chat_async completed - session_id: {request.session_id}, "
+                f"correlation_id: {correlation_id}, "
+                f"duration: {duration:.2f}s, "
+                f"response: {result[:50]}..."
+            )
+
+            # TODO: 可以在这里添加回调通知机制
+            # await notify_callback(correlation_id, result, duration)
+
+        except Exception as e:
+            duration = time.time() - start_time
+            logger.error(
+                f"chat_async failed - session_id: {request.session_id}, "
+                f"correlation_id: {correlation_id}, "
+                f"duration: {duration:.2f}s, "
+                f"error: {str(e)}",
+                exc_info=True,
+            )
+
+    # 核心：使用 restart 取消同 session 旧任务
+    await task_manager.restart(
+        _process_chat(),
+        tag=f"session:{request.session_id}",
+    )
+
+    return ChatAsyncResponse(
+        status=202,
+        code=0,
+        message="processing",
+        correlation_id=correlation_id,
+        session_id=request.session_id,
+    )
 
 
 # =============================================================================
