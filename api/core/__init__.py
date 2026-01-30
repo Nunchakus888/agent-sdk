@@ -16,7 +16,13 @@ from api.core.correlation import (
     ID_GENERATION_ALPHABET,
     ID_SIZE,
 )
-from api.core.logging import setup_logging, get_logger
+from api.core.logging import (
+    setup_logging,
+    get_logger,
+    LogContext,
+    LogLevel,
+    log,
+)
 from api.core.middleware import setup_middlewares
 
 __all__ = [
@@ -34,6 +40,9 @@ __all__ = [
     # Logging
     "setup_logging",
     "get_logger",
+    "LogContext",
+    "LogLevel",
+    "log",
     # Middleware
     "setup_middlewares",
 ]

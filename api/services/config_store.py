@@ -129,7 +129,7 @@ class MongoConfigStore(ConfigStore):
     - 适用于生产环境和多实例部署
     """
     
-    def __init__(self, db: Any, collection_name: str = COLLECTIONS.PARSED_CONFIGS):
+    def __init__(self, db: Any, collection_name: str = COLLECTIONS.CONFIGS):
         self._collection = db[collection_name]
         self._indexes_created = False
     

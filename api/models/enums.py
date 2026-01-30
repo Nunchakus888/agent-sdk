@@ -23,40 +23,39 @@ class MessageRole(str, Enum):
     TOOL = "tool"
 
 
-class AgentStatus(str, Enum):
-    """Agent 状态"""
-    INITIALIZING = "initializing"
-    READY = "ready"
-    PROCESSING = "processing"
+class AgentPhase(str, Enum):
+    """Agent 处理阶段"""
+    PLANNING = "planning"
+    EXECUTING = "executing"
+    RESPONDING = "responding"
     IDLE = "idle"
+
+
+class EventType(str, Enum):
+    """事件类型"""
+    CONFIG_LOAD = "config_load"
+    CONFIG_PARSE = "config_parse"
+    CACHE_HIT = "cache_hit"
+    CACHE_MISS = "cache_miss"
+    LLM_DECISION = "llm_decision"
+    TOOL_CALL = "tool_call"
+    KB_RETRIEVE = "kb_retrieve"
+    RESPONSE_GENERATE = "response_gen"
     ERROR = "error"
-    TERMINATED = "terminated"
 
 
-class AuditAction(str, Enum):
-    """审计动作类型"""
-    # 会话相关
-    SESSION_CREATED = "session_created"
-    SESSION_CLOSED = "session_closed"
-    SESSION_EXPIRED = "session_expired"
+class EventStatus(str, Enum):
+    """事件状态"""
+    STARTED = "started"
+    COMPLETED = "completed"
+    FAILED = "failed"
 
-    # 消息相关
-    MESSAGE_RECEIVED = "message_received"
-    MESSAGE_SENT = "message_sent"
 
-    # Agent 相关
-    AGENT_CREATED = "agent_created"
-    AGENT_DESTROYED = "agent_destroyed"
-    AGENT_CONFIG_CHANGED = "agent_config_changed"
-
-    # 配置相关
-    CONFIG_PARSED = "config_parsed"
-    CONFIG_LOADED = "config_loaded"
-
-    # 工具调用
-    TOOL_INVOKED = "tool_invoked"
-    TOOL_COMPLETED = "tool_completed"
-    TOOL_FAILED = "tool_failed"
-
-    # 错误
-    ERROR_OCCURRED = "error_occurred"
+class InspectionPhase(str, Enum):
+    """Token 消耗阶段"""
+    CONFIG_PARSE = "config_parse"
+    DECISION = "decision"
+    TOOL_CALL = "tool_call"
+    KB_RETRIEVE = "kb_retrieve"
+    RESPONSE = "response"
+    OTHER = "other"

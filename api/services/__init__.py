@@ -1,7 +1,8 @@
 """
-业务服务模块
+业务服务模块 v3
 
 提供 Agent 管理、配置存储、数据库管理、任务管理等功能
+5表设计：configs, sessions, messages, events, usages
 """
 
 from api.services.agent_manager import AgentManager, AgentInfo, ParsedConfig
@@ -20,21 +21,22 @@ from api.services.database import (
 )
 from api.models import (
     SessionDocument,
-    SessionStatus,
     MessageDocument,
     MessageRole,
-    AgentStateDocument,
-    AgentStatus,
-    AuditLogDocument,
-    AuditAction,
+    EventDocument,
+    EventType,
+    EventStatus,
+    TokenDocument,
+    TokenDetail,
+    TokenSummary,
 )
 from api.services.task_manager import TaskManager
 from api.services.repositories import (
     RepositoryManager,
     SessionRepository,
     MessageRepository,
-    AgentStateRepository,
-    AuditLogRepository,
+    EventRepository,
+    UsageRepository,
     create_repository_manager,
 )
 
@@ -54,22 +56,23 @@ __all__ = [
     "COLLECTIONS",
     "Database",
     "get_database",
-    # 数据模型
+    # v3 核心模型
     "SessionDocument",
-    "SessionStatus",
     "MessageDocument",
     "MessageRole",
-    "AgentStateDocument",
-    "AgentStatus",
-    "AuditLogDocument",
-    "AuditAction",
-    # Repository
+    "EventDocument",
+    "EventType",
+    "EventStatus",
+    "TokenDocument",
+    "TokenDetail",
+    "TokenSummary",
+    # v3 Repository
     "RepositoryManager",
     "SessionRepository",
     "MessageRepository",
-    "AgentStateRepository",
-    "AuditLogRepository",
+    "EventRepository",
+    "UsageRepository",
     "create_repository_manager",
-    # 任务管理（协程取消机制）
+    # 任务管理
     "TaskManager",
 ]
