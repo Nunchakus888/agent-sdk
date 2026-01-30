@@ -11,6 +11,8 @@ from api.models.enums import (
     AgentPhase,
     EventType,
     EventStatus,
+    AuditAction,
+    AgentStatus,
 )
 from api.models.collections import (
     Collections,
@@ -44,6 +46,8 @@ __all__ = [
     "AgentPhase",
     "EventType",
     "EventStatus",
+    "AuditAction",
+    "AgentStatus",
     # 集合
     "Collections",
     "COLLECTIONS",

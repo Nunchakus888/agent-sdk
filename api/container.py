@@ -2,13 +2,12 @@
 依赖注入容器
 
 提供全局服务容器和依赖注入，支持：
+- LLMService 单例（模型服务）
 - WorkflowEngine 单例（统一的工作流引擎）
 - AgentManager 单例（Agent 生命周期管理）
 - TaskManager 单例（协程任务取消机制）
 - Database 单例（数据库管理）
 - RepositoryManager 单例（数据访问层）
-- 配置管理
-- Agent 生命周期管理
 """
 
 from typing import Annotated, Any
@@ -21,6 +20,7 @@ from api.services import AgentManager
 from api.services.task_manager import TaskManager
 from api.services.database import DB_NAME, Database, get_database
 from api.services.repositories import RepositoryManager, create_repository_manager
+from api.services.llm_service import LLMService, LLMConfig, ModelTask
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,42 @@ _agent_manager: AgentManager | None = None
 _task_manager: TaskManager | None = None
 _database: Database | None = None
 _repository_manager: RepositoryManager | None = None
+
+
+# =============================================================================
+# LLMService 依赖注入
+# =============================================================================
+
+
+def initialize_llm_service(config: LLMConfig | None = None) -> LLMService:
+    """
+    初始化 LLMService（单例）
+
+    Args:
+        config: LLM 配置，默认从环境变量加载
+
+    Returns:
+        LLMService 实例
+    """
+    return LLMService.initialize(config)
+
+
+def get_llm_service() -> LLMService:
+    """获取 LLMService 实例（依赖注入）"""
+    return LLMService.get_instance()
+
+
+def shutdown_llm_service() -> None:
+    """关闭 LLMService"""
+    LLMService.shutdown()
+
+
+LLMServiceDep = Annotated[LLMService, Depends(get_llm_service)]
+
+
+# =============================================================================
+# WorkflowEngine 依赖注入
+# =============================================================================
 
 
 async def initialize_workflow_engine(
@@ -66,9 +102,9 @@ async def initialize_workflow_engine(
     if _workflow_engine is not None:
         return _workflow_engine
 
-    # LLM 工厂
-    from bu_agent_sdk.llm.anthropic.chat import ChatAnthropic
-    llm_factory = lambda: ChatAnthropic()
+    # 使用 LLMService 创建 LLM 工厂（复用连接）
+    llm_service = get_llm_service()
+    llm_factory = lambda: llm_service.get_decision_llm()
 
     # MongoDB 客户端（可选）
     mongo_client = None
@@ -146,7 +182,7 @@ def get_mongo_db(db_name: str = DB_NAME) -> Any | None:
 
 def initialize_agent_manager(
     config_dir: str = "config",
-    idle_timeout: int = 300,
+    idle_timeout: int = 600,
     cleanup_interval: int = 60,
     enable_llm_parsing: bool = False,
     db_name: str = DB_NAME,

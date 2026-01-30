@@ -20,16 +20,13 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from bu_agent_sdk.agent.workflow_agent import WorkflowAgent
-from bu_agent_sdk.config import load_config, get_llm_decision_llm
 from bu_agent_sdk.tools.actions import WorkflowConfigSchema
 
 from api.services.config_store import (
-    ConfigStore,
     StoredConfig,
-    MemoryConfigStore,
-    MongoConfigStore,
     create_config_store,
 )
+from api.services.llm_service import LLMService
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +126,7 @@ class AgentManager:
     def __init__(
         self,
         config_dir: str = "config",
-        idle_timeout: int = 300,
+        idle_timeout: int = 600,
         cleanup_interval: int = 60,
         enable_llm_parsing: bool = False,
         mongo_db: Any | None = None,
@@ -145,8 +142,6 @@ class AgentManager:
         # 配置存储（用完即走，无额外缓存）
         self._config_store = create_config_store(mongo_db)
 
-        # 应用配置
-        self._app_config = load_config()
         self._start_time = time.time()
         self._cleanup_task: Optional[asyncio.Task] = None
 
@@ -169,30 +164,6 @@ class AgentManager:
         
         with open(config_path, "r", encoding="utf-8") as f:
             return json.load(f)
-
-    def _get_config_path(self, chatbot_id: str, tenant_id: str) -> Path:
-        """获取配置文件路径"""
-        # 支持多种配置文件命名方式
-        # 1. tenant_id/chatbot_id.json
-        # 2. chatbot_id.json
-        # 3. workflow_config.json (默认)
-
-        tenant_config = self.config_dir / tenant_id / f"{chatbot_id}.json"
-        if tenant_config.exists():
-            return tenant_config
-
-        chatbot_config = self.config_dir / f"{chatbot_id}.json"
-        if chatbot_config.exists():
-            return chatbot_config
-
-        default_config = self.config_dir / "workflow_config.json"
-        if default_config.exists():
-            return default_config
-
-        raise FileNotFoundError(
-            f"Configuration file not found for chatbot_id={chatbot_id}, "
-            f"tenant_id={tenant_id}"
-        )
 
     async def _parse_config(
         self, raw_config: dict, config_hash: str
@@ -318,7 +289,7 @@ class AgentManager:
             return raw_config
 
         try:
-            llm = get_llm_decision_llm(self._app_config)
+            llm = LLMService.get_instance().get_decision_llm()
 
             # 构建验证和增强的 prompt
             validation_prompt = self._build_config_validation_prompt(
@@ -659,33 +630,33 @@ Now analyze the configuration and instruction, then provide your JSON output."""
     ) -> ParsedConfig:
         """
         获取或解析配置（用完即走）
-        
+
         流程：Store 有则用，无则解析并存储
-        
+
         Args:
             chatbot_id: Chatbot ID
             tenant_id: 租户 ID
             config_hash: 配置哈希（客户端传入）
             raw_config: 原始配置数据
-        
+
         Returns:
             ParsedConfig 对象
         """
         # 1. 查询存储
         stored = await self._config_store.get(config_hash)
         if stored:
-            logger.debug(f"Config found: {config_hash}")
+            logger.info(f"Config cache HIT (hash={config_hash[:12]})")
             workflow_config = WorkflowConfigSchema(**stored.parsed_config)
             return ParsedConfig(
                 config=workflow_config,
                 config_hash=config_hash,
                 raw_config=stored.raw_config,
             )
-        
+
         # 2. 解析并存储
-        logger.info(f"Config not found: {config_hash}, parsing...")
+        logger.info(f"Config cache MISS (hash={config_hash[:12]}), parsing...")
         parsed_config = await self._parse_config(raw_config, config_hash)
-        
+
         await self._config_store.save(StoredConfig(
             config_hash=config_hash,
             tenant_id=tenant_id,
@@ -693,21 +664,19 @@ Now analyze the configuration and instruction, then provide your JSON output."""
             raw_config=raw_config,
             parsed_config=parsed_config.config.model_dump(),
         ))
-        
-        logger.info(f"Config stored: {config_hash} ({self._config_store.store_type})")
+
+        logger.info(f"Config parsed and stored (hash={config_hash[:12]})")
         return parsed_config
 
     async def _create_agent(
         self, chatbot_id: str, tenant_id: str, parsed_config: ParsedConfig
     ) -> AgentInfo:
         """创建新的 Agent"""
-        logger.info(
-            f"Creating new agent for chatbot_id={chatbot_id}, "
-            f"tenant_id={tenant_id}, config_hash={parsed_config.config_hash}"
-        )
+        agent_key = self._get_agent_key(chatbot_id, tenant_id)
+        logger.debug(f"Creating agent: {agent_key}")
 
-        # 创建 LLM
-        llm = get_llm_decision_llm(self._app_config)
+        # 使用 LLMService 获取 LLM（复用连接）
+        llm = LLMService.get_instance().get_decision_llm()
 
         # 创建存储组件（使用内存存储）
         # 注意：如果需要持久化存储，可以在这里配置 MongoDB/Redis
@@ -730,11 +699,7 @@ Now analyze the configuration and instruction, then provide your JSON output."""
             parsed_config=parsed_config,
         )
 
-        logger.info(
-            f"Agent created successfully: "
-            f"agent_key={self._get_agent_key(chatbot_id, tenant_id)}, "
-            f"config_hash={parsed_config.config_hash}"
-        )
+        logger.info(f"Agent created: {agent_key}")
 
         return agent_info
 
@@ -748,51 +713,37 @@ Now analyze the configuration and instruction, then provide your JSON output."""
     ) -> WorkflowAgent:
         """
         获取或创建 Agent
-        
+
         Args:
             chatbot_id: Chatbot ID
             tenant_id: 租户 ID
             session_id: 会话 ID
             config_hash: 配置哈希（必须，由客户端提供）
             raw_config: 原始配置（可选，未提供时从文件加载）
-        
+
         Returns:
             WorkflowAgent 实例
         """
         agent_key = self._get_agent_key(chatbot_id, tenant_id)
-        
-        # 加载原始配置（如果未提供）
+
+        # 优先检查缓存：agent 存在且配置未变更时直接复用
+        if agent_key in self._agents:
+            agent_info = self._agents[agent_key]
+            if config_hash == agent_info.config_hash:
+                agent_info.add_session(session_id)
+                logger.info(f"Agent cache HIT (sessions={agent_info.session_count})")
+                return agent_info.agent
+            # 配置变更，移除旧 agent
+            logger.info("Agent config changed, recreating...")
+            await self.remove_agent(chatbot_id, tenant_id)
+
+        # 需要创建新 Agent：加载并解析配置
+        logger.info("Agent cache MISS, creating...")
         if raw_config is None:
             raw_config = self._load_raw_config(chatbot_id, tenant_id)
-        
-        # 获取或解析配置
         parsed_config = await self._get_or_parse_config(
             chatbot_id, tenant_id, config_hash, raw_config
         )
-
-        # 检查是否已存在 Agent
-        if agent_key in self._agents:
-            agent_info = self._agents[agent_key]
-
-            # 检查配置是否变更
-            if parsed_config.config_hash != agent_info.config_hash:
-                logger.info(
-                    f"Configuration changed for {agent_key}, "
-                    f"old_hash={agent_info.config_hash}, "
-                    f"new_hash={parsed_config.config_hash}"
-                )
-                # 配置变更，重新创建 Agent
-                await self.remove_agent(chatbot_id, tenant_id)
-            else:
-                # 配置未变更，复用现有 Agent
-                agent_info.add_session(session_id)
-                logger.debug(
-                    f"Reusing existing agent: {agent_key}, "
-                    f"session_count={agent_info.session_count}"
-                )
-                return agent_info.agent
-
-        # 创建新 Agent
         agent_info = await self._create_agent(chatbot_id, tenant_id, parsed_config)
         agent_info.add_session(session_id)
         self._agents[agent_key] = agent_info
@@ -919,11 +870,12 @@ Now analyze the configuration and instruction, then provide your JSON output."""
             "chatbot_id": agent_info.chatbot_id,
             "tenant_id": agent_info.tenant_id,
             "config_hash": agent_info.config_hash,
+            "status": "idle" if agent_info.is_idle else "processing",
             "session_count": agent_info.session_count,
+            "metadata": {
+                "is_idle": agent_info.is_idle,
+                "idle_time": agent_info.idle_time if agent_info.is_idle else 0,
+            },
             "created_at": datetime.fromtimestamp(agent_info.created_at).isoformat(),
-            "last_active_at": datetime.fromtimestamp(
-                agent_info.last_active_at
-            ).isoformat(),
-            "is_idle": agent_info.is_idle,
-            "idle_time": agent_info.idle_time if agent_info.is_idle else 0,
+            "updated_at": datetime.fromtimestamp(agent_info.last_active_at).isoformat(),
         }

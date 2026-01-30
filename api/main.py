@@ -1,7 +1,7 @@
 """
 FastAPI Web API for Workflow Agent
 
-主应用入口
+主应用入口 - 采用工厂模式创建应用
 """
 
 import asyncio
@@ -10,13 +10,14 @@ from contextlib import asynccontextmanager
 from typing import Awaitable, Callable
 
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
 from starlette.types import Receive, Scope, Send
 
 from api import __version__
-from api.core import setup_logging, get_logger, setup_middlewares
-from api.routes import router
+from api.core import setup_logging, get_logger, setup_middlewares, setup_exception_handlers
+from api.routers import query, sessions, agents, health
 from api.container import (
+    initialize_llm_service,
+    shutdown_llm_service,
     initialize_workflow_engine,
     shutdown_workflow_engine,
     initialize_agent_manager,
@@ -71,6 +72,13 @@ async def lifespan(app: FastAPI):
             mongodb_uri = None
         
         mongodb_db = os.getenv("MONGODB_DB", "workflow_agent")
+
+        # 初始化 LLMService（必须在 WorkflowEngine 之前）
+        llm_service = initialize_llm_service()
+        logger.info(
+            f"LLMService initialized - "
+            f"default_model={llm_service.config.default_model}"
+        )
 
         # 初始化 WorkflowEngine
         engine = await initialize_workflow_engine(
@@ -144,6 +152,7 @@ async def lifespan(app: FastAPI):
     await shutdown_task_manager()
     await shutdown_agent_manager()
     await shutdown_workflow_engine()
+    shutdown_llm_service()
     logger.info("Shutdown complete")
 
 
@@ -172,66 +181,92 @@ class AppWrapper:
 
 
 # =============================================================================
-# 应用创建
-# =============================================================================
-
-_fastapi_app = FastAPI(
-    title="Workflow Agent API",
-    description="RESTful API for BU Agent SDK Workflow Agent (Multi-tenant, Session-based)",
-    version=__version__,
-    lifespan=lifespan,
-    docs_url="/docs",
-    redoc_url="/redoc",
-    openapi_url="/openapi.json",
-)
-
-
-# =============================================================================
-# 中间件配置
-# =============================================================================
-
-setup_middlewares(_fastapi_app)
-
-
-# =============================================================================
-# 异常处理
+# 应用创建 - 工厂模式
 # =============================================================================
 
 
-@_fastapi_app.exception_handler(Exception)
-async def global_exception_handler(request, exc):
-    """全局异常处理"""
-    _ = request  # 避免未使用警告
-    logger.error(f"Unhandled exception: {exc}", exc_info=True)
-    return JSONResponse(
-        status_code=500,
-        content={
-            "error": type(exc).__name__,
-            "message": str(exc),
-            "detail": "Internal server error",
-        },
+def create_api_app(
+    title: str = "Workflow Agent API",
+    description: str = "RESTful API for Workflow Agent (Multi-tenant, Session-based)",
+    version: str = __version__,
+    docs_url: str = "/docs",
+    redoc_url: str = "/redoc",
+    openapi_url: str = "/openapi.json",
+) -> FastAPI:
+    """
+    创建 FastAPI 应用实例（工厂函数）
+
+    采用工厂模式的优点：
+    1. 易于测试 - 可以创建多个独立的应用实例
+    2. 可配置 - 支持不同环境的配置
+    3. 解耦 - 应用创建与启动分离
+
+    Args:
+        title: API 标题
+        description: API 描述
+        version: API 版本
+        docs_url: Swagger 文档路径
+        redoc_url: ReDoc 文档路径
+        openapi_url: OpenAPI schema 路径
+
+    Returns:
+        配置完成的 FastAPI 应用实例
+    """
+    fastapi_app = FastAPI(
+        title=title,
+        description=description,
+        version=version,
+        lifespan=lifespan,
+        docs_url=docs_url,
+        redoc_url=redoc_url,
+        openapi_url=openapi_url,
     )
 
+    # 配置中间件
+    setup_middlewares(fastapi_app)
 
-# =============================================================================
-# 路由注册
-# =============================================================================
+    # 配置异常处理器
+    setup_exception_handlers(fastapi_app)
 
-# 注册 API 路由
-_fastapi_app.include_router(router, prefix="/api/v1", tags=["Workflow Agent"])
+    # 注册模块化路由
+    fastapi_app.include_router(
+        query.create_router(),
+        prefix="/api/v1",
+        tags=["Query"],
+    )
+    fastapi_app.include_router(
+        sessions.create_router(),
+        prefix="/api/v1/session",
+        tags=["Sessions"],
+    )
+    fastapi_app.include_router(
+        agents.create_router(),
+        prefix="/api/v1/agent",
+        tags=["Agents"],
+    )
+    fastapi_app.include_router(
+        health.create_router(),
+        prefix="/api/v1",
+        tags=["Health"],
+    )
+
+    # 根路径
+    @fastapi_app.get("/", tags=["Root"])
+    async def root():
+        """API 根路径"""
+        return {
+            "name": title,
+            "version": version,
+            "description": description,
+            "docs": docs_url,
+            "health": "/api/v1/health",
+        }
+
+    return fastapi_app
 
 
-# 根路径
-@_fastapi_app.get("/", tags=["Root"])
-async def root():
-    """API 根路径"""
-    return {
-        "name": "Workflow Agent API",
-        "version": __version__,
-        "description": "Multi-tenant, Session-based Workflow Agent API",
-        "docs": "/docs",
-        "health": "/api/v1/health",
-    }
+# 创建默认应用实例
+_fastapi_app = create_api_app()
 
 
 # =============================================================================

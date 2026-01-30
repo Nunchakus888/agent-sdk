@@ -1,7 +1,7 @@
 """
 核心基础设施模块
 
-提供日志、追踪、中间件等基础功能
+提供日志、追踪、中间件、异常处理等基础功能
 """
 
 from api.core.correlation import (
@@ -24,6 +24,16 @@ from api.core.logging import (
     log,
 )
 from api.core.middleware import setup_middlewares
+from api.core.exceptions import (
+    APIException,
+    ItemNotFoundError,
+    AuthorizationError,
+    RateLimitExceededError,
+    ConfigurationError,
+    ErrorResponseModel,
+    create_error_response,
+    setup_exception_handlers,
+)
 
 __all__ = [
     # Correlation
@@ -45,4 +55,13 @@ __all__ = [
     "log",
     # Middleware
     "setup_middlewares",
+    # Exceptions
+    "APIException",
+    "ItemNotFoundError",
+    "AuthorizationError",
+    "RateLimitExceededError",
+    "ConfigurationError",
+    "ErrorResponseModel",
+    "create_error_response",
+    "setup_exception_handlers",
 ]
