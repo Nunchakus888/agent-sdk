@@ -64,18 +64,18 @@ class QueryResponse(BaseModel):
 
 
 class SessionInfo(BaseModel):
-    """会话信息"""
+    """会话信息 (精简版)"""
 
     session_id: str = Field(..., description="会话ID")
     chatbot_id: str = Field(..., description="Chatbot ID")
     tenant_id: str = Field(..., description="租户ID")
     customer_id: Optional[str] = Field(default=None, description="客户ID")
-    agent_id: str = Field(..., description="Agent ID")
-    config_hash: str = Field(..., description="配置哈希")
+    agent_id: Optional[str] = Field(default=None, description="Agent ID")
     status: str = Field(..., description="会话状态")
-    message_count: int = Field(..., description="消息数量")
+    message_count: int = Field(default=0, description="消息数量 (通过查询获取)")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="元数据")
     created_at: Optional[str] = Field(default=None, description="创建时间")
-    last_active_at: Optional[str] = Field(default=None, description="最后活跃时间")
+    updated_at: Optional[str] = Field(default=None, description="更新时间")
 
     class Config:
         json_schema_extra = {
@@ -85,11 +85,11 @@ class SessionInfo(BaseModel):
                 "tenant_id": "dev-test",
                 "customer_id": "cust_123xy",
                 "agent_id": "workflow_agent_68d510aedff9455e5b019b3e",
-                "config_hash": "abc123def456",
                 "status": "active",
                 "message_count": 10,
+                "metadata": {"title": "Order Inquiry", "source": "api"},
                 "created_at": "2026-01-23T10:00:00Z",
-                "last_active_at": "2026-01-23T10:30:00Z"
+                "updated_at": "2026-01-23T10:30:00Z"
             }
         }
 
@@ -135,15 +135,17 @@ class ErrorResponse(BaseModel):
 
 
 class AgentStats(BaseModel):
-    """Agent 统计信息"""
+    """Agent 统计信息 (精简版)"""
 
     agent_id: str = Field(..., description="Agent ID")
     chatbot_id: str = Field(..., description="Chatbot ID")
     tenant_id: str = Field(..., description="租户ID")
     config_hash: str = Field(..., description="配置哈希")
-    session_count: int = Field(..., description="关联会话数")
+    status: str = Field(..., description="Agent 状态")
+    session_count: int = Field(default=0, description="关联会话数 (通过查询获取)")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="元数据")
     created_at: str = Field(..., description="创建时间")
-    last_active_at: str = Field(..., description="最后活跃时间")
+    updated_at: str = Field(..., description="更新时间")
 
     class Config:
         json_schema_extra = {
@@ -152,9 +154,11 @@ class AgentStats(BaseModel):
                 "chatbot_id": "68d510aedff9455e5b019b3e",
                 "tenant_id": "dev-test",
                 "config_hash": "abc123def456",
+                "status": "ready",
                 "session_count": 5,
+                "metadata": {},
                 "created_at": "2026-01-23T10:00:00Z",
-                "last_active_at": "2026-01-23T10:30:00Z"
+                "updated_at": "2026-01-23T10:30:00Z"
             }
         }
 

@@ -1,29 +1,30 @@
 """
-Repository 层
+Repository 层 v3
 
 提供各数据表的 CRUD 操作，封装数据库访问逻辑
-支持 MongoDB 和内存存储两种模式
+5表设计：configs, sessions, messages, events, usages
 """
 
 import logging
 import uuid
-from abc import ABC, abstractmethod
+from abc import ABC
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import List, Optional
 
-from api.services.database import (
-    Database,
-    COLLECTIONS,
-)
+from api.services.database import Database
 from api.models import (
+    # v3 核心模型
     SessionDocument,
-    SessionStatus,
     MessageDocument,
+    MessageState,
+    EventDocument,
+    EventType,
+    EventStatus,
+    TokenDocument,
+    TokenDetail,
+    # 枚举
     MessageRole,
-    AgentStateDocument,
-    AgentStatus,
-    AuditLogDocument,
-    AuditAction,
+    AgentPhase,
 )
 
 logger = logging.getLogger(__name__)
@@ -35,7 +36,7 @@ def generate_id() -> str:
 
 
 # =============================================================================
-# 基础 Repository 接口
+# 基础 Repository
 # =============================================================================
 
 
@@ -52,15 +53,16 @@ class BaseRepository(ABC):
 
 
 # =============================================================================
-# Session Repository
+# Session Repository (v3)
 # =============================================================================
 
 
 class SessionRepository(BaseRepository):
     """
-    会话 Repository
+    会话 Repository (v3)
 
     管理会话的创建、查询、更新和关闭
+    v3: 字段平铺设计，统计字段在会话关闭时计算
     """
 
     def __init__(self, db: Database | None):
@@ -73,11 +75,9 @@ class SessionRepository(BaseRepository):
         tenant_id: str,
         chatbot_id: str,
         customer_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
         config_hash: Optional[str] = None,
         title: Optional[str] = None,
-        source: str = "api",
-        is_preview: bool = False,
+        source: Optional[str] = None,
         metadata: Optional[dict] = None,
     ) -> SessionDocument:
         """创建会话"""
@@ -87,13 +87,9 @@ class SessionRepository(BaseRepository):
             tenant_id=tenant_id,
             chatbot_id=chatbot_id,
             customer_id=customer_id,
-            status=SessionStatus.ACTIVE,
-            agent_id=agent_id,
             config_hash=config_hash,
-            message_count=0,
             title=title,
             source=source,
-            is_preview=is_preview,
             metadata=metadata or {},
             created_at=now,
             updated_at=now,
@@ -101,10 +97,8 @@ class SessionRepository(BaseRepository):
 
         if self.is_persistent:
             await self._db.sessions.insert_one(session.to_dict())
-            logger.debug(f"Session created in DB: {session_id}")
         else:
             self._memory_store[session_id] = session
-            logger.debug(f"Session created in memory: {session_id}")
 
         return session
 
@@ -113,8 +107,7 @@ class SessionRepository(BaseRepository):
         if self.is_persistent:
             doc = await self._db.sessions.find_one({"_id": session_id})
             return SessionDocument.from_dict(doc) if doc else None
-        else:
-            return self._memory_store.get(session_id)
+        return self._memory_store.get(session_id)
 
     async def get_or_create(
         self,
@@ -123,29 +116,14 @@ class SessionRepository(BaseRepository):
         chatbot_id: str,
         **kwargs,
     ) -> tuple[SessionDocument, bool]:
-        """
-        获取或创建会话
-
-        Returns:
-            (session, created): 会话对象和是否新创建
-        """
+        """获取或创建会话，返回 (session, created)"""
         session = await self.get(session_id)
         if session:
             return session, False
-
-        session = await self.create(
-            session_id=session_id,
-            tenant_id=tenant_id,
-            chatbot_id=chatbot_id,
-            **kwargs,
-        )
+        session = await self.create(session_id, tenant_id, chatbot_id, **kwargs)
         return session, True
 
-    async def update(
-        self,
-        session_id: str,
-        **updates,
-    ) -> Optional[SessionDocument]:
+    async def update(self, session_id: str, **updates) -> Optional[SessionDocument]:
         """更新会话"""
         updates["updated_at"] = datetime.utcnow()
 
@@ -165,46 +143,46 @@ class SessionRepository(BaseRepository):
                 return session
             return None
 
-    async def increment_message_count(
-        self,
-        session_id: str,
-        increment: int = 1,
-    ) -> None:
-        """增加消息计数"""
-        now = datetime.utcnow()
-
+    async def allocate_event_offset(self, session_id: str) -> int:
+        """原子操作分配 event offset"""
         if self.is_persistent:
-            await self._db.sessions.update_one(
+            result = await self._db.sessions.find_one_and_update(
                 {"_id": session_id},
-                {
-                    "$inc": {"message_count": increment},
-                    "$set": {
-                        "updated_at": now,
-                        "last_message_at": now,
-                    },
-                },
+                {"$inc": {"event_count": 1}},
+                return_document=True,
             )
+            return result["event_count"] if result else 0
         else:
             session = self._memory_store.get(session_id)
             if session:
-                session.message_count += increment
-                session.updated_at = now
-                session.last_message_at = now
+                # 内存模式下模拟 event_count
+                count = session.metadata.get("_event_count", 0) + 1
+                session.metadata["_event_count"] = count
+                return count
+            return 0
 
-    async def close(self, session_id: str) -> Optional[SessionDocument]:
-        """关闭会话"""
-        now = datetime.utcnow()
+    async def close(
+        self,
+        session_id: str,
+        message_count: int = 0,
+        event_count: int = 0,
+        total_tokens: int = 0,
+        total_cost: float = 0.0,
+    ) -> Optional[SessionDocument]:
+        """关闭会话并更新统计"""
         return await self.update(
             session_id,
-            status=SessionStatus.CLOSED.value,
-            closed_at=now,
+            closed_at=datetime.utcnow(),
+            message_count=message_count,
+            event_count=event_count,
+            total_tokens=total_tokens,
+            total_cost=total_cost,
         )
 
     async def list_by_tenant(
         self,
         tenant_id: str,
         chatbot_id: Optional[str] = None,
-        status: Optional[SessionStatus] = None,
         limit: int = 100,
         offset: int = 0,
     ) -> List[SessionDocument]:
@@ -212,8 +190,6 @@ class SessionRepository(BaseRepository):
         query = {"tenant_id": tenant_id}
         if chatbot_id:
             query["chatbot_id"] = chatbot_id
-        if status:
-            query["status"] = status.value
 
         if self.is_persistent:
             cursor = self._db.sessions.find(query).sort("created_at", -1).skip(offset).limit(limit)
@@ -224,42 +200,36 @@ class SessionRepository(BaseRepository):
                 s for s in self._memory_store.values()
                 if s.tenant_id == tenant_id
                 and (chatbot_id is None or s.chatbot_id == chatbot_id)
-                and (status is None or s.status == status)
             ]
             sessions.sort(key=lambda x: x.created_at, reverse=True)
             return sessions[offset:offset + limit]
 
 
 # =============================================================================
-# Message Repository
+# Message Repository (v3)
 # =============================================================================
 
 
 class MessageRepository(BaseRepository):
     """
-    消息 Repository
+    消息 Repository (v3)
 
-    管理会话消息的存储和查询
+    v3 变更：移除 tool_calls, tool_call_id, parent_message_id, latency_ms
     """
 
     def __init__(self, db: Database | None):
         super().__init__(db)
         self._memory_store: dict[str, MessageDocument] = {}
-        self._session_index: dict[str, List[str]] = {}  # session_id -> [message_ids]
+        self._session_index: dict[str, List[str]] = {}
 
     async def create(
         self,
         session_id: str,
-        tenant_id: str,
         role: MessageRole,
         content: str,
         message_id: Optional[str] = None,
         correlation_id: Optional[str] = None,
-        parent_message_id: Optional[str] = None,
-        tool_calls: Optional[List[dict]] = None,
-        tool_call_id: Optional[str] = None,
-        token_count: Optional[int] = None,
-        latency_ms: Optional[int] = None,
+        state: Optional[MessageState] = None,
         metadata: Optional[dict] = None,
     ) -> MessageDocument:
         """创建消息"""
@@ -267,38 +237,30 @@ class MessageRepository(BaseRepository):
         message = MessageDocument(
             message_id=msg_id,
             session_id=session_id,
-            tenant_id=tenant_id,
             role=role,
             content=content,
             correlation_id=correlation_id,
-            parent_message_id=parent_message_id,
-            tool_calls=tool_calls,
-            tool_call_id=tool_call_id,
-            token_count=token_count,
-            latency_ms=latency_ms,
+            state=state,
             metadata=metadata or {},
             created_at=datetime.utcnow(),
         )
 
         if self.is_persistent:
-            await self._db.session_messages.insert_one(message.to_dict())
-            logger.debug(f"Message created in DB: {msg_id}")
+            await self._db.messages.insert_one(message.to_dict())
         else:
             self._memory_store[msg_id] = message
             if session_id not in self._session_index:
                 self._session_index[session_id] = []
             self._session_index[session_id].append(msg_id)
-            logger.debug(f"Message created in memory: {msg_id}")
 
         return message
 
     async def get(self, message_id: str) -> Optional[MessageDocument]:
         """获取消息"""
         if self.is_persistent:
-            doc = await self._db.session_messages.find_one({"_id": message_id})
+            doc = await self._db.messages.find_one({"_id": message_id})
             return MessageDocument.from_dict(doc) if doc else None
-        else:
-            return self._memory_store.get(message_id)
+        return self._memory_store.get(message_id)
 
     async def list_by_session(
         self,
@@ -312,7 +274,7 @@ class MessageRepository(BaseRepository):
 
         if self.is_persistent:
             cursor = (
-                self._db.session_messages
+                self._db.messages
                 .find({"session_id": session_id})
                 .sort("created_at", sort_order)
                 .skip(offset)
@@ -329,406 +291,361 @@ class MessageRepository(BaseRepository):
     async def count_by_session(self, session_id: str) -> int:
         """统计会话消息数"""
         if self.is_persistent:
-            return await self._db.session_messages.count_documents({"session_id": session_id})
-        else:
-            return len(self._session_index.get(session_id, []))
+            return await self._db.messages.count_documents({"session_id": session_id})
+        return len(self._session_index.get(session_id, []))
 
-    async def delete_by_session(self, session_id: str) -> int:
-        """删除会话的所有消息"""
+    async def update_state(
+        self,
+        message_id: str,
+        phase: AgentPhase,
+        sop_step: Optional[str] = None,
+        context: Optional[dict] = None,
+        decision: Optional[dict] = None,
+    ) -> bool:
+        """更新消息的嵌入状态"""
+        state = MessageState(
+            phase=phase,
+            sop_step=sop_step,
+            context=context or {},
+            decision=decision,
+        )
+
         if self.is_persistent:
-            result = await self._db.session_messages.delete_many({"session_id": session_id})
-            return result.deleted_count
+            result = await self._db.messages.update_one(
+                {"_id": message_id},
+                {"$set": {"state": state.to_dict()}}
+            )
+            return result.modified_count > 0
         else:
-            msg_ids = self._session_index.pop(session_id, [])
-            for mid in msg_ids:
-                self._memory_store.pop(mid, None)
-            return len(msg_ids)
+            message = self._memory_store.get(message_id)
+            if message:
+                message.state = state
+                return True
+            return False
 
 
 # =============================================================================
-# Agent State Repository
+# Event Repository (v3)
 # =============================================================================
 
 
-class AgentStateRepository(BaseRepository):
+class EventRepository(BaseRepository):
     """
-    Agent 状态 Repository
+    事件 Repository (v3)
 
-    管理 Agent 运行时状态的持久化
-    """
-
-    def __init__(self, db: Database | None):
-        super().__init__(db)
-        self._memory_store: dict[str, AgentStateDocument] = {}
-
-    @staticmethod
-    def make_agent_id(tenant_id: str, chatbot_id: str) -> str:
-        """生成 Agent ID"""
-        return f"{tenant_id}:{chatbot_id}"
-
-    async def create_or_update(
-        self,
-        tenant_id: str,
-        chatbot_id: str,
-        status: AgentStatus = AgentStatus.READY,
-        config_hash: str = "",
-        **kwargs,
-    ) -> AgentStateDocument:
-        """创建或更新 Agent 状态"""
-        agent_id = self.make_agent_id(tenant_id, chatbot_id)
-        now = datetime.utcnow()
-
-        existing = await self.get(agent_id)
-        if existing:
-            # 更新
-            updates = {
-                "status": status.value,
-                "config_hash": config_hash,
-                "updated_at": now,
-                "last_active_at": now,
-                **kwargs,
-            }
-            return await self.update(agent_id, **updates)
-        else:
-            # 创建
-            state = AgentStateDocument(
-                agent_id=agent_id,
-                tenant_id=tenant_id,
-                chatbot_id=chatbot_id,
-                status=status,
-                config_hash=config_hash,
-                created_at=now,
-                updated_at=now,
-                last_active_at=now,
-            )
-
-            if self.is_persistent:
-                await self._db.agent_states.insert_one(state.to_dict())
-            else:
-                self._memory_store[agent_id] = state
-
-            return state
-
-    async def get(self, agent_id: str) -> Optional[AgentStateDocument]:
-        """获取 Agent 状态"""
-        if self.is_persistent:
-            doc = await self._db.agent_states.find_one({"_id": agent_id})
-            return AgentStateDocument.from_dict(doc) if doc else None
-        else:
-            return self._memory_store.get(agent_id)
-
-    async def get_by_tenant_chatbot(
-        self,
-        tenant_id: str,
-        chatbot_id: str,
-    ) -> Optional[AgentStateDocument]:
-        """按租户和 Chatbot 获取 Agent 状态"""
-        agent_id = self.make_agent_id(tenant_id, chatbot_id)
-        return await self.get(agent_id)
-
-    async def update(
-        self,
-        agent_id: str,
-        **updates,
-    ) -> Optional[AgentStateDocument]:
-        """更新 Agent 状态"""
-        updates["updated_at"] = datetime.utcnow()
-
-        # 处理枚举值
-        if "status" in updates and isinstance(updates["status"], AgentStatus):
-            updates["status"] = updates["status"].value
-
-        if self.is_persistent:
-            result = await self._db.agent_states.find_one_and_update(
-                {"_id": agent_id},
-                {"$set": updates},
-                return_document=True,
-            )
-            return AgentStateDocument.from_dict(result) if result else None
-        else:
-            state = self._memory_store.get(agent_id)
-            if state:
-                for key, value in updates.items():
-                    if hasattr(state, key):
-                        setattr(state, key, value)
-                return state
-            return None
-
-    async def add_session(
-        self,
-        agent_id: str,
-        session_id: str,
-    ) -> None:
-        """添加会话到 Agent"""
-        now = datetime.utcnow()
-
-        if self.is_persistent:
-            await self._db.agent_states.update_one(
-                {"_id": agent_id},
-                {
-                    "$addToSet": {"active_sessions": session_id},
-                    "$inc": {"total_sessions": 1},
-                    "$set": {
-                        "updated_at": now,
-                        "last_active_at": now,
-                        "status": AgentStatus.PROCESSING.value,
-                    },
-                },
-            )
-        else:
-            state = self._memory_store.get(agent_id)
-            if state:
-                if session_id not in state.active_sessions:
-                    state.active_sessions.append(session_id)
-                    state.total_sessions += 1
-                state.updated_at = now
-                state.last_active_at = now
-                state.status = AgentStatus.PROCESSING
-
-    async def remove_session(
-        self,
-        agent_id: str,
-        session_id: str,
-    ) -> None:
-        """从 Agent 移除会话"""
-        now = datetime.utcnow()
-
-        if self.is_persistent:
-            # 先移除会话
-            await self._db.agent_states.update_one(
-                {"_id": agent_id},
-                {
-                    "$pull": {"active_sessions": session_id},
-                    "$set": {"updated_at": now, "last_active_at": now},
-                },
-            )
-            # 检查是否还有活跃会话，更新状态
-            state = await self.get(agent_id)
-            if state and len(state.active_sessions) == 0:
-                await self.update(agent_id, status=AgentStatus.IDLE.value)
-        else:
-            state = self._memory_store.get(agent_id)
-            if state:
-                if session_id in state.active_sessions:
-                    state.active_sessions.remove(session_id)
-                state.updated_at = now
-                state.last_active_at = now
-                if len(state.active_sessions) == 0:
-                    state.status = AgentStatus.IDLE
-
-    async def increment_message_count(
-        self,
-        agent_id: str,
-        increment: int = 1,
-    ) -> None:
-        """增加消息计数"""
-        now = datetime.utcnow()
-
-        if self.is_persistent:
-            await self._db.agent_states.update_one(
-                {"_id": agent_id},
-                {
-                    "$inc": {"total_messages": increment},
-                    "$set": {"updated_at": now, "last_active_at": now},
-                },
-            )
-        else:
-            state = self._memory_store.get(agent_id)
-            if state:
-                state.total_messages += increment
-                state.updated_at = now
-                state.last_active_at = now
-
-    async def delete(self, agent_id: str) -> bool:
-        """删除 Agent 状态"""
-        if self.is_persistent:
-            result = await self._db.agent_states.delete_one({"_id": agent_id})
-            return result.deleted_count > 0
-        else:
-            return self._memory_store.pop(agent_id, None) is not None
-
-    async def list_by_status(
-        self,
-        status: AgentStatus,
-        limit: int = 100,
-    ) -> List[AgentStateDocument]:
-        """按状态列出 Agent"""
-        if self.is_persistent:
-            cursor = (
-                self._db.agent_states
-                .find({"status": status.value})
-                .sort("last_active_at", -1)
-                .limit(limit)
-            )
-            docs = await cursor.to_list(length=limit)
-            return [AgentStateDocument.from_dict(doc) for doc in docs]
-        else:
-            states = [s for s in self._memory_store.values() if s.status == status]
-            states.sort(key=lambda x: x.last_active_at, reverse=True)
-            return states[:limit]
-
-
-# =============================================================================
-# Audit Log Repository
-# =============================================================================
-
-
-class AuditLogRepository(BaseRepository):
-    """
-    审计日志 Repository
-
-    记录所有重要操作的审计轨迹
+    v3 变更：增加 offset, action；移除 tokens（独立到 usages 表）
     """
 
     def __init__(self, db: Database | None):
         super().__init__(db)
-        self._memory_store: List[AuditLogDocument] = []
+        self._memory_store: dict[str, EventDocument] = {}
+        self._correlation_index: dict[str, List[str]] = {}
 
-    async def log(
+    async def create(
         self,
-        tenant_id: str,
-        action: AuditAction,
-        session_id: Optional[str] = None,
-        agent_id: Optional[str] = None,
-        chatbot_id: Optional[str] = None,
+        session_id: str,
+        correlation_id: str,
+        event_type: EventType,
+        offset: int,
+        event_id: Optional[str] = None,
+        action: Optional[str] = None,
         message_id: Optional[str] = None,
-        correlation_id: Optional[str] = None,
-        request_id: Optional[str] = None,
-        details: Optional[dict] = None,
-        success: bool = True,
-        error_message: Optional[str] = None,
+        status: EventStatus = EventStatus.STARTED,
         duration_ms: Optional[int] = None,
-        source: str = "api",
-        ip_address: Optional[str] = None,
-        user_agent: Optional[str] = None,
-    ) -> AuditLogDocument:
-        """记录审计日志"""
-        log_id = generate_id()
-        audit_log = AuditLogDocument(
-            log_id=log_id,
-            tenant_id=tenant_id,
-            action=action,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+        input_data: Optional[dict] = None,
+        output_data: Optional[dict] = None,
+        error: Optional[str] = None,
+        metadata: Optional[dict] = None,
+    ) -> EventDocument:
+        """创建事件"""
+        eid = event_id or generate_id()
+        event = EventDocument(
+            event_id=eid,
             session_id=session_id,
-            agent_id=agent_id,
-            chatbot_id=chatbot_id,
-            message_id=message_id,
             correlation_id=correlation_id,
-            request_id=request_id,
-            details=details or {},
-            success=success,
-            error_message=error_message,
+            offset=offset,
+            message_id=message_id,
+            event_type=event_type,
+            action=action,
+            status=status,
             duration_ms=duration_ms,
-            source=source,
-            ip_address=ip_address,
-            user_agent=user_agent,
+            start_time=start_time or datetime.utcnow(),
+            end_time=end_time,
+            input_data=input_data,
+            output_data=output_data,
+            error=error,
+            metadata=metadata or {},
             created_at=datetime.utcnow(),
         )
 
         if self.is_persistent:
-            await self._db.audit_logs.insert_one(audit_log.to_dict())
-            logger.debug(f"Audit log created: {action.value}")
+            await self._db.events.insert_one(event.to_dict())
         else:
-            self._memory_store.append(audit_log)
-            # 内存模式下限制日志数量
-            if len(self._memory_store) > 10000:
-                self._memory_store = self._memory_store[-5000:]
+            self._memory_store[eid] = event
+            if correlation_id not in self._correlation_index:
+                self._correlation_index[correlation_id] = []
+            self._correlation_index[correlation_id].append(eid)
 
-        return audit_log
+        return event
+
+    async def get(self, event_id: str) -> Optional[EventDocument]:
+        """获取事件"""
+        if self.is_persistent:
+            doc = await self._db.events.find_one({"_id": event_id})
+            return EventDocument.from_dict(doc) if doc else None
+        return self._memory_store.get(event_id)
+
+    async def complete(
+        self,
+        event_id: str,
+        output_data: Optional[dict] = None,
+        error: Optional[str] = None,
+    ) -> Optional[EventDocument]:
+        """完成事件"""
+        now = datetime.utcnow()
+        event = await self.get(event_id)
+        if not event:
+            return None
+
+        duration_ms = None
+        if event.start_time:
+            duration_ms = int((now - event.start_time).total_seconds() * 1000)
+
+        updates = {
+            "status": EventStatus.FAILED.value if error else EventStatus.COMPLETED.value,
+            "end_time": now,
+            "duration_ms": duration_ms,
+        }
+        if output_data:
+            updates["output_data"] = output_data
+        if error:
+            updates["error"] = error
+
+        if self.is_persistent:
+            result = await self._db.events.find_one_and_update(
+                {"_id": event_id},
+                {"$set": updates},
+                return_document=True,
+            )
+            return EventDocument.from_dict(result) if result else None
+        else:
+            for key, value in updates.items():
+                if hasattr(event, key):
+                    setattr(event, key, value)
+            return event
 
     async def list_by_session(
         self,
         session_id: str,
+        event_type: Optional[EventType] = None,
         limit: int = 100,
         offset: int = 0,
-    ) -> List[AuditLogDocument]:
-        """按会话列出审计日志"""
-        if self.is_persistent:
-            cursor = (
-                self._db.audit_logs
-                .find({"session_id": session_id})
-                .sort("created_at", -1)
-                .skip(offset)
-                .limit(limit)
-            )
-            docs = await cursor.to_list(length=limit)
-            return [AuditLogDocument.from_dict(doc) for doc in docs]
-        else:
-            logs = [log for log in self._memory_store if log.session_id == session_id]
-            logs.sort(key=lambda x: x.created_at, reverse=True)
-            return logs[offset:offset + limit]
-
-    async def list_by_tenant(
-        self,
-        tenant_id: str,
-        action: Optional[AuditAction] = None,
-        limit: int = 100,
-        offset: int = 0,
-    ) -> List[AuditLogDocument]:
-        """按租户列出审计日志"""
-        query = {"tenant_id": tenant_id}
-        if action:
-            query["action"] = action.value
+    ) -> List[EventDocument]:
+        """按会话列出事件（按 offset 排序）"""
+        query = {"session_id": session_id}
+        if event_type:
+            query["event_type"] = event_type.value
 
         if self.is_persistent:
             cursor = (
-                self._db.audit_logs
+                self._db.events
                 .find(query)
-                .sort("created_at", -1)
+                .sort("offset", 1)
                 .skip(offset)
                 .limit(limit)
             )
             docs = await cursor.to_list(length=limit)
-            return [AuditLogDocument.from_dict(doc) for doc in docs]
+            return [EventDocument.from_dict(doc) for doc in docs]
         else:
-            logs = [
-                log for log in self._memory_store
-                if log.tenant_id == tenant_id
-                and (action is None or log.action == action)
+            events = [
+                e for e in self._memory_store.values()
+                if e.session_id == session_id
+                and (event_type is None or e.event_type == event_type)
             ]
-            logs.sort(key=lambda x: x.created_at, reverse=True)
-            return logs[offset:offset + limit]
+            events.sort(key=lambda x: x.offset)
+            return events[offset:offset + limit]
 
     async def list_by_correlation(
         self,
         correlation_id: str,
         limit: int = 100,
-    ) -> List[AuditLogDocument]:
-        """按关联 ID 列出审计日志"""
+    ) -> List[EventDocument]:
+        """按 correlation_id 列出事件（全链路追踪）"""
         if self.is_persistent:
             cursor = (
-                self._db.audit_logs
+                self._db.events
                 .find({"correlation_id": correlation_id})
-                .sort("created_at", 1)
+                .sort("offset", 1)
                 .limit(limit)
             )
             docs = await cursor.to_list(length=limit)
-            return [AuditLogDocument.from_dict(doc) for doc in docs]
+            return [EventDocument.from_dict(doc) for doc in docs]
         else:
-            logs = [log for log in self._memory_store if log.correlation_id == correlation_id]
-            logs.sort(key=lambda x: x.created_at)
-            return logs[:limit]
+            event_ids = self._correlation_index.get(correlation_id, [])
+            events = [self._memory_store[eid] for eid in event_ids if eid in self._memory_store]
+            events.sort(key=lambda x: x.offset)
+            return events[:limit]
+
+    async def count_by_session(self, session_id: str) -> int:
+        """统计会话事件数"""
+        if self.is_persistent:
+            return await self._db.events.count_documents({"session_id": session_id})
+        return len([e for e in self._memory_store.values() if e.session_id == session_id])
 
 
 # =============================================================================
-# Repository Manager
+# Usage Repository (v3 新增)
+# =============================================================================
+
+
+class UsageRepository(BaseRepository):
+    """
+    Token 消耗 Repository (v3)
+
+    独立存储 Token 消耗，支持明细和汇总
+    一个 correlation_id 对应一条记录
+    """
+
+    def __init__(self, db: Database | None):
+        super().__init__(db)
+        self._memory_store: dict[str, TokenDocument] = {}
+        self._correlation_index: dict[str, str] = {}
+
+    async def create(
+        self,
+        session_id: str,
+        correlation_id: str,
+        token_id: Optional[str] = None,
+        message_id: Optional[str] = None,
+    ) -> TokenDocument:
+        """创建 Token 记录"""
+        tid = token_id or generate_id()
+        token_doc = TokenDocument(
+            token_id=tid,
+            session_id=session_id,
+            correlation_id=correlation_id,
+            message_id=message_id,
+            details=[],
+            summary=None,
+            is_finalized=False,
+            created_at=datetime.utcnow(),
+        )
+
+        if self.is_persistent:
+            await self._db.usages.insert_one(token_doc.to_dict())
+        else:
+            self._memory_store[tid] = token_doc
+            self._correlation_index[correlation_id] = tid
+
+        return token_doc
+
+    async def get(self, token_id: str) -> Optional[TokenDocument]:
+        """获取 Token 记录"""
+        if self.is_persistent:
+            doc = await self._db.usages.find_one({"_id": token_id})
+            return TokenDocument.from_dict(doc) if doc else None
+        return self._memory_store.get(token_id)
+
+    async def get_by_correlation(self, correlation_id: str) -> Optional[TokenDocument]:
+        """按 correlation_id 获取 Token 记录"""
+        if self.is_persistent:
+            doc = await self._db.usages.find_one({"correlation_id": correlation_id})
+            return TokenDocument.from_dict(doc) if doc else None
+        else:
+            tid = self._correlation_index.get(correlation_id)
+            return self._memory_store.get(tid) if tid else None
+
+    async def add_detail(self, token_id: str, detail: TokenDetail) -> bool:
+        """添加 Token 明细"""
+        if self.is_persistent:
+            result = await self._db.usages.update_one(
+                {"_id": token_id},
+                {"$push": {"details": detail.to_dict()}}
+            )
+            return result.modified_count > 0
+        else:
+            token_doc = self._memory_store.get(token_id)
+            if token_doc:
+                token_doc.add_detail(detail)
+                return True
+            return False
+
+    async def finalize(self, token_id: str) -> Optional[TokenDocument]:
+        """计算汇总并标记完成"""
+        token_doc = await self.get(token_id)
+        if not token_doc:
+            return None
+
+        # 在内存中计算汇总
+        token_doc.finalize()
+
+        if self.is_persistent:
+            await self._db.usages.update_one(
+                {"_id": token_id},
+                {"$set": {
+                    "summary": token_doc.summary.to_dict() if token_doc.summary else None,
+                    "is_finalized": True,
+                    "finalized_at": token_doc.finalized_at,
+                }}
+            )
+
+        return token_doc
+
+    async def get_session_stats(self, session_id: str) -> dict:
+        """获取会话的 Token 统计"""
+        if self.is_persistent:
+            pipeline = [
+                {"$match": {"session_id": session_id, "is_finalized": True}},
+                {"$group": {
+                    "_id": None,
+                    "total_tokens": {"$sum": "$summary.total_tokens"},
+                    "total_cost": {"$sum": "$summary.total_cost"},
+                    "request_count": {"$sum": 1},
+                }}
+            ]
+            result = await self._db.usages.aggregate(pipeline).to_list(1)
+            if result:
+                return {
+                    "total_tokens": result[0].get("total_tokens", 0),
+                    "total_cost": result[0].get("total_cost", 0.0),
+                    "request_count": result[0].get("request_count", 0),
+                }
+        else:
+            tokens = [
+                t for t in self._memory_store.values()
+                if t.session_id == session_id and t.is_finalized and t.summary
+            ]
+            return {
+                "total_tokens": sum(t.summary.total_tokens for t in tokens),
+                "total_cost": sum(t.summary.total_cost for t in tokens),
+                "request_count": len(tokens),
+            }
+        return {"total_tokens": 0, "total_cost": 0.0, "request_count": 0}
+
+
+# =============================================================================
+# Repository Manager (v3)
 # =============================================================================
 
 
 class RepositoryManager:
     """
-    Repository 管理器
+    Repository 管理器 (v3)
 
     统一管理所有 Repository 实例
+    5表设计：configs, sessions, messages, events, usages
     """
 
     def __init__(self, db: Database | None):
         self._db = db
         self._sessions = SessionRepository(db)
         self._messages = MessageRepository(db)
-        self._agent_states = AgentStateRepository(db)
-        self._audit_logs = AuditLogRepository(db)
+        self._events = EventRepository(db)
+        self._usages = UsageRepository(db)
 
-        logger.info(f"RepositoryManager initialized: persistent={db is not None and db.is_connected}")
+        logger.info(f"RepositoryManager v3 initialized: persistent={db is not None and db.is_connected}")
 
     @property
     def sessions(self) -> SessionRepository:
@@ -741,14 +658,14 @@ class RepositoryManager:
         return self._messages
 
     @property
-    def agent_states(self) -> AgentStateRepository:
-        """Agent 状态 Repository"""
-        return self._agent_states
+    def events(self) -> EventRepository:
+        """事件 Repository"""
+        return self._events
 
     @property
-    def audit_logs(self) -> AuditLogRepository:
-        """审计日志 Repository"""
-        return self._audit_logs
+    def usages(self) -> UsageRepository:
+        """Token 消耗 Repository"""
+        return self._usages
 
     @property
     def is_persistent(self) -> bool:

@@ -1,7 +1,8 @@
 """
-数据库管理器
+数据库管理器 v3
 
 提供统一的数据库访问入口
+5表设计：configs, sessions, messages, events, usages
 """
 
 import logging
@@ -15,13 +16,14 @@ logger = logging.getLogger(__name__)
 
 class Database:
     """
-    数据库管理器
+    数据库管理器 (v3)
 
     提供统一的数据库访问入口
+    5表设计：configs, sessions, messages, events, usages
 
     Usage:
         db = Database(mongo_client)
-        configs = db.collection(COLLECTIONS.PARSED_CONFIGS)
+        configs = db.configs
         await configs.find_one({"_id": "hash123"})
     """
 
@@ -66,30 +68,34 @@ class Database:
             raise RuntimeError("Database not connected")
         return self._db[name]
 
+    # =========================================================================
+    # v3 核心集合
+    # =========================================================================
+
     @property
-    def parsed_configs(self) -> Any:
-        """配置集合（快捷访问）"""
-        return self.collection(COLLECTIONS.PARSED_CONFIGS)
+    def configs(self) -> Any:
+        """配置集合"""
+        return self.collection(COLLECTIONS.CONFIGS)
 
     @property
     def sessions(self) -> Any:
-        """会话集合（快捷访问）"""
+        """会话集合"""
         return self.collection(COLLECTIONS.SESSIONS)
 
     @property
-    def session_messages(self) -> Any:
-        """会话消息集合（快捷访问）"""
-        return self.collection(COLLECTIONS.SESSION_MESSAGES)
+    def messages(self) -> Any:
+        """消息集合"""
+        return self.collection(COLLECTIONS.MESSAGES)
 
     @property
-    def agent_states(self) -> Any:
-        """Agent 状态集合（快捷访问）"""
-        return self.collection(COLLECTIONS.AGENT_STATES)
+    def events(self) -> Any:
+        """事件集合"""
+        return self.collection(COLLECTIONS.EVENTS)
 
     @property
-    def audit_logs(self) -> Any:
-        """审计日志集合（快捷访问）"""
-        return self.collection(COLLECTIONS.AUDIT_LOGS)
+    def usages(self) -> Any:
+        """Token 消耗集合"""
+        return self.collection(COLLECTIONS.USAGES)
 
     async def ensure_indexes(self) -> None:
         """
@@ -150,11 +156,11 @@ class Database:
 
         stats = {}
         for collection_name in [
-            COLLECTIONS.PARSED_CONFIGS,
+            COLLECTIONS.CONFIGS,
             COLLECTIONS.SESSIONS,
-            COLLECTIONS.SESSION_MESSAGES,
-            COLLECTIONS.AGENT_STATES,
-            COLLECTIONS.AUDIT_LOGS,
+            COLLECTIONS.MESSAGES,
+            COLLECTIONS.EVENTS,
+            COLLECTIONS.USAGES,
         ]:
             try:
                 count = await self._db[collection_name].count_documents({})

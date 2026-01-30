@@ -1,14 +1,16 @@
 """
-数据模型模块
+数据模型模块 v3
 
 统一导出所有数据模型
+5表设计：configs, sessions, messages, events, usages
 """
 
 from api.models.enums import (
     SessionStatus,
     MessageRole,
-    AgentStatus,
-    AuditAction,
+    AgentPhase,
+    EventType,
+    EventStatus,
 )
 from api.models.collections import (
     Collections,
@@ -17,8 +19,12 @@ from api.models.collections import (
 from api.models.documents import (
     SessionDocument,
     MessageDocument,
-    AgentStateDocument,
-    AuditLogDocument,
+    MessageState,
+    EventDocument,
+    TokenDocument,
+    TokenDetail,
+    TokenSummary,
+    TokenUsage,
 )
 from api.models.schemas import (
     QueryRequest,
@@ -35,16 +41,22 @@ __all__ = [
     # 枚举
     "SessionStatus",
     "MessageRole",
-    "AgentStatus",
-    "AuditAction",
+    "AgentPhase",
+    "EventType",
+    "EventStatus",
     # 集合
     "Collections",
     "COLLECTIONS",
-    # 文档模型
+    # v3 核心模型
     "SessionDocument",
     "MessageDocument",
-    "AgentStateDocument",
-    "AuditLogDocument",
+    "MessageState",
+    "EventDocument",
+    # v3 Token 相关
+    "TokenDocument",
+    "TokenDetail",
+    "TokenSummary",
+    "TokenUsage",
     # API 模型
     "QueryRequest",
     "QueryResponse",
