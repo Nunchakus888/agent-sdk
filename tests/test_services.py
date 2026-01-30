@@ -273,12 +273,13 @@ class TestDatabaseConstants:
         assert DB_NAME == "workflow_agent"
     
     def test_collections(self):
-        """测试集合名称"""
-        assert COLLECTIONS.PARSED_CONFIGS == "parsed_configs"
+        """测试集合名称 (v3)"""
+        # v3 核心集合
+        assert COLLECTIONS.CONFIGS == "configs"
         assert COLLECTIONS.SESSIONS == "sessions"
-        assert COLLECTIONS.SESSION_MESSAGES == "session_messages"
-        assert COLLECTIONS.AGENT_STATES == "agent_states"
-        assert COLLECTIONS.AUDIT_LOGS == "audit_logs"
+        assert COLLECTIONS.MESSAGES == "messages"
+        assert COLLECTIONS.EVENTS == "events"
+        assert COLLECTIONS.USAGES == "usages"
 
 
 # =============================================================================
@@ -308,7 +309,7 @@ class TestDatabase:
         db = Database(mongo_client=None)
         
         with pytest.raises(RuntimeError, match="Database not connected"):
-            db.collection(COLLECTIONS.PARSED_CONFIGS)
+            db.collection(COLLECTIONS.CONFIGS)
     
     def test_collection_connected(self):
         """测试已连接时获取集合"""
@@ -317,11 +318,11 @@ class TestDatabase:
         mock_collection = MagicMock()
         mock_client.__getitem__ = MagicMock(return_value=mock_db)
         mock_db.__getitem__ = MagicMock(return_value=mock_collection)
-        
+
         db = Database(mongo_client=mock_client)
-        collection = db.collection(COLLECTIONS.PARSED_CONFIGS)
-        
-        mock_db.__getitem__.assert_called_with(COLLECTIONS.PARSED_CONFIGS)
+        collection = db.collection(COLLECTIONS.CONFIGS)
+
+        mock_db.__getitem__.assert_called_with(COLLECTIONS.CONFIGS)
     
     def test_shortcut_properties(self):
         """测试快捷属性"""
@@ -329,21 +330,25 @@ class TestDatabase:
         mock_db = MagicMock()
         mock_client.__getitem__ = MagicMock(return_value=mock_db)
         mock_db.__getitem__ = MagicMock(return_value=MagicMock())
-        
+
         db = Database(mongo_client=mock_client)
-        
+
         # 访问快捷属性
-        _ = db.parsed_configs
+        _ = db.configs
         _ = db.sessions
-        _ = db.session_messages
-        
+        _ = db.messages
+        _ = db.events
+        _ = db.usages
+
         # 验证调用
         calls = mock_db.__getitem__.call_args_list
         collection_names = [call[0][0] for call in calls]
-        
-        assert COLLECTIONS.PARSED_CONFIGS in collection_names
+
+        assert COLLECTIONS.CONFIGS in collection_names
         assert COLLECTIONS.SESSIONS in collection_names
-        assert COLLECTIONS.SESSION_MESSAGES in collection_names
+        assert COLLECTIONS.MESSAGES in collection_names
+        assert COLLECTIONS.EVENTS in collection_names
+        assert COLLECTIONS.USAGES in collection_names
 
 
 # =============================================================================

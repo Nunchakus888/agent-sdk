@@ -1,7 +1,7 @@
 """
 业务服务模块 v3
 
-提供 Agent 管理、配置存储、数据库管理、任务管理等功能
+提供 Agent 管理、配置存储、数据库管理、任务管理、LLM 服务等功能
 5表设计：configs, sessions, messages, events, usages
 """
 
@@ -39,8 +39,13 @@ from api.services.repositories import (
     UsageRepository,
     create_repository_manager,
 )
+from api.services.llm_service import LLMService, LLMConfig, ModelTask
 
 __all__ = [
+    # LLM 服务
+    "LLMService",
+    "LLMConfig",
+    "ModelTask",
     # Agent 管理
     "AgentManager",
     "AgentInfo",

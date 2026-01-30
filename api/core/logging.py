@@ -228,50 +228,56 @@ class ContextFormatter(logging.Formatter):
     自动将上下文信息添加到日志消息中。
     """
 
-    # 需要显示的上下文字段（按优先级排序）
-    CONTEXT_FIELDS = [
-        "correlation_id",
-        "session_id",
-        "agent_id",
-        "chatbot_id",
-        "tenant_id",
-    ]
+    def formatTime(self, record: logging.LogRecord, datefmt: str | None = None) -> str:
+        """格式化时间戳（支持微秒）"""
+        ct = datetime.fromtimestamp(record.created)
+        if datefmt:
+            # 手动处理 %f（微秒）
+            s = ct.strftime(datefmt.replace("%f", f"{ct.microsecond:06d}"))
+        else:
+            s = ct.strftime("%Y-%m-%dT%H:%M:%S.%fZ".replace("%f", f"{ct.microsecond:06d}"))
+        return s
 
     def format(self, record: logging.LogRecord) -> str:
-        # 获取 correlation_id
+        # 获取 correlation_id（短格式）
         correlation_id = correlator.correlation_id
         if not correlation_id or correlation_id == "-":
-            correlation_id = "<main>"
-
-        # 获取作用域
-        scopes = _scope_stack.get()
-        scope_str = "::".join(scopes) if scopes else ""
-
+            cid = "*"
+        else:
+            cid = correlation_id[:11]  # 保留11位，足够唯一识别
+        
         # 获取上下文属性
         ctx = _log_context.get()
-
-        # 构建上下文字符串
-        ctx_parts = [f"cid={correlation_id}"]
-
-        if scope_str:
-            ctx_parts.append(f"scope={scope_str}")
-
-        # 添加关键上下文字段
-        for field in self.CONTEXT_FIELDS:
-            if field in ctx and field != "correlation_id":
-                value = ctx[field]
-                # 截断过长的值
-                if isinstance(value, str) and len(value) > 20:
-                    value = value[:17] + "..."
-                ctx_parts.append(f"{field}={value}")
-
-        # 格式化消息
-        ctx_str = " ".join(ctx_parts)
-
+        
+        # 获取 session_id（简化显示）
+        session_id = ctx.get("session_id")
+        sid = self._truncate(session_id, 20) if session_id else None
+        
+        # 获取作用域
+        scopes = _scope_stack.get()
+        scope = scopes[-1] if scopes else None  # 只显示当前作用域
+        
+        # 构建上下文字符串（紧凑格式）
+        if sid and scope:
+            ctx_str = f"[{cid}] [{sid}:{scope}]"
+        elif sid:
+            ctx_str = f"[{cid}] [{sid}]"
+        else:
+            ctx_str = f"[{cid}]"
+        
         # 设置到 record
         record.ctx = ctx_str
 
         return super().format(record)
+    
+    @staticmethod
+    def _truncate(value: str | None, max_len: int = 20) -> str:
+        """截断过长的值"""
+        if not value:
+            return ""
+        if len(value) <= max_len:
+            return value
+        return value[:max_len - 3] + "..."
 
 
 # =============================================================================
@@ -310,10 +316,11 @@ def setup_logging(
     level_name = os.getenv("LOG_LEVEL", log_level).upper()
     level = getattr(logging, level_name, logging.INFO)
 
-    # 日志格式：简洁格式
-    # [级别] [上下文] 消息
-    log_format = "[%(levelname)-8s] [%(ctx)s] %(message)s"
-    formatter = ContextFormatter(log_format)
+    # 日志格式：带时间戳的简洁格式
+    # timestamp [level] [cid] [sid:scope] message
+    log_format = "%(asctime)s [%(levelname)-8s] %(ctx)s %(message)s"
+    date_format = "%Y-%m-%dT%H:%M:%S.%fZ"
+    formatter = ContextFormatter(log_format, datefmt=date_format)
 
     # 获取根日志器
     root_logger = logging.getLogger()

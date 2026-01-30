@@ -137,7 +137,16 @@ class MongoConfigStore(ConfigStore):
         """惰性创建索引"""
         if self._indexes_created:
             return
-        await self._collection.create_index([("tenant_id", 1), ("chatbot_id", 1)])
+        try:
+            await self._collection.create_index(
+                [("tenant_id", 1), ("chatbot_id", 1)],
+                name="idx_tenant_chatbot",
+                background=True,
+            )
+        except Exception as e:
+            logger.error(f"Failed to create indexes: {str(e)}")
+            # 索引可能已存在，忽略错误
+            pass
         self._indexes_created = True
     
     async def get(self, config_hash: str) -> StoredConfig | None:
