@@ -19,8 +19,6 @@ from api.models import (
     ToolCallDocumentV2,
     UsageDocumentV2,
     TimerDocumentV2,
-    # 枚举
-    MessageRole,
 )
 from api.services.repositories import (
     RepositoryManager,

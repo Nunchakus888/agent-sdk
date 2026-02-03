@@ -68,6 +68,7 @@ class SessionContext:
         session_id: Session ID
         tenant_id: Tenant ID
         chatbot_id: Chatbot ID
+        config_hash: 配置哈希（用于检测配置更新）
         agent: WorkflowAgentV2 instance
         timer: Session-level Timer
     """
@@ -77,6 +78,9 @@ class SessionContext:
 
     # Agent instance (session-level)
     agent: WorkflowAgentV2 = field(default=None, repr=False)
+
+    # 配置哈希（用于检测配置更新）
+    config_hash: str = ""
 
     # Timer (session-level)
     timer: Optional[SessionTimer] = None
@@ -121,6 +125,7 @@ class SessionContext:
             "session_id": self.session_id,
             "tenant_id": self.tenant_id,
             "chatbot_id": self.chatbot_id,
+            "config_hash": self.config_hash,
             "created_at": self.created_at.isoformat(),
             "last_active_at": self.last_active_at.isoformat(),
             "idle_seconds": round(self.idle_seconds, 1),

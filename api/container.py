@@ -7,6 +7,11 @@
 - 清晰的生命周期管理（create / shutdown）
 - 与 FastAPI 依赖注入系统兼容
 - 易于测试（可以创建独立的上下文实例）
+
+架构简化：
+- 移除 ConfigLoader 内存缓存层
+- 配置加载由 SessionManager 内部处理（DB → HTTP）
+- Session 存在直接返回，不存在才加载配置
 """
 
 import logging
@@ -21,7 +26,7 @@ from api.services.repositories import RepositoryManager, create_repository_manag
 from api.services.llm_service import LLMService
 
 if TYPE_CHECKING:
-    from api.services.v2 import ConfigLoader, SessionManager
+    from api.services.v2 import SessionManager
 
 logger = logging.getLogger(__name__)
 
@@ -39,15 +44,11 @@ class AppConfig:
     mongodb_uri: str | None = None
     mongodb_db: str = DB_NAME
 
-    # ConfigLoader
-    cache_size: int = 100
-    cache_ttl: int = 3600
-    enable_llm_parsing: bool = False
-
     # SessionManager
     idle_timeout: int = 1800
     cleanup_interval: int = 60
     max_sessions: int = 10000
+    enable_llm_parsing: bool = False
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -55,12 +56,10 @@ class AppConfig:
         return cls(
             mongodb_uri=os.getenv("MONGODB_URI"),
             mongodb_db=os.getenv("MONGODB_DB", DB_NAME),
-            cache_size=int(os.getenv("CONFIG_CACHE_SIZE", "100")),
-            cache_ttl=int(os.getenv("CONFIG_CACHE_TTL", "3600")),
-            enable_llm_parsing=os.getenv("ENABLE_LLM_PARSING", "").lower() == "true",
             idle_timeout=int(os.getenv("SESSION_IDLE_TIMEOUT", "1800")),
             cleanup_interval=int(os.getenv("SESSION_CLEANUP_INTERVAL", "60")),
             max_sessions=int(os.getenv("MAX_SESSIONS", "10000")),
+            enable_llm_parsing=os.getenv("ENABLE_LLM_PARSING", "").lower() == "true",
         )
 
 
@@ -81,9 +80,13 @@ class AppContext:
         ctx = await AppContext.create()
         await ctx.session_manager.start()
 
-        # 使用服务
-        config = await ctx.config_loader.load(...)
-        session = await ctx.session_manager.get_or_create(...)
+        # 使用服务（配置加载由 SessionManager 内部处理）
+        session = await ctx.session_manager.get_or_create(
+            session_id="...",
+            tenant_id="...",
+            chatbot_id="...",
+            config_hash="...",
+        )
 
         # 关闭
         await ctx.shutdown()
@@ -96,7 +99,6 @@ class AppContext:
     repository_manager: RepositoryManager | None = None
 
     # 业务服务
-    config_loader: "ConfigLoader | None" = None
     session_manager: "SessionManager | None" = None
 
     # 单例
@@ -163,21 +165,16 @@ class AppContext:
 
     def _init_services(self, config: AppConfig) -> None:
         """初始化业务服务"""
-        from api.services.v2 import ConfigLoader, SessionManager
-
-        self.config_loader = ConfigLoader(
-            database=self.database,
-            cache_size=config.cache_size,
-            cache_ttl=config.cache_ttl,
-            enable_llm_parsing=config.enable_llm_parsing,
-        )
+        from api.services.v2 import SessionManager
 
         self.session_manager = SessionManager(
             repos=self.repository_manager,
+            database=self.database,
             llm_provider=LLMService.get_instance(),
             idle_timeout=config.idle_timeout,
             cleanup_interval=config.cleanup_interval,
             max_sessions=config.max_sessions,
+            enable_llm_parsing=config.enable_llm_parsing,
         )
 
     async def shutdown(self) -> None:
@@ -185,8 +182,6 @@ class AppContext:
         if self.session_manager:
             await self.session_manager.stop()
             self.session_manager = None
-
-        self.config_loader = None
 
         if self.mongo_client:
             self.mongo_client.close()
@@ -212,7 +207,7 @@ class AppContext:
 # FastAPI 依赖注入
 # =============================================================================
 
-from api.services.v2 import ConfigLoader, SessionManager
+from api.services.v2 import SessionManager
 
 
 def get_app_context() -> AppContext:
@@ -228,13 +223,6 @@ def get_repository_manager() -> RepositoryManager:
     if ctx.repository_manager is None:
         raise RuntimeError("RepositoryManager not initialized")
     return ctx.repository_manager
-
-
-def get_config_loader() -> ConfigLoader:
-    ctx = AppContext.get_instance()
-    if ctx.config_loader is None:
-        raise RuntimeError("ConfigLoader not initialized")
-    return ctx.config_loader
 
 
 def get_session_manager() -> SessionManager:
@@ -255,6 +243,5 @@ def get_llm_service() -> LLMService:
 AppContextDep = Annotated[AppContext, Depends(get_app_context)]
 DatabaseDep = Annotated[Database | None, Depends(get_database)]
 RepositoryManagerDep = Annotated[RepositoryManager, Depends(get_repository_manager)]
-ConfigLoaderDep = Annotated[ConfigLoader, Depends(get_config_loader)]
 SessionManagerDep = Annotated[SessionManager, Depends(get_session_manager)]
 LLMServiceDep = Annotated[LLMService, Depends(get_llm_service)]

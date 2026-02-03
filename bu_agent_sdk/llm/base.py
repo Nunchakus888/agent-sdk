@@ -58,6 +58,41 @@ class BaseChatModel(Protocol):
     All LLM implementations (OpenAI, Anthropic, Google, etc.) must implement this protocol.
     """
 
+
+@runtime_checkable
+class LLMProvider(Protocol):
+    """Protocol for LLM provider that supports task-specific models.
+    
+    This allows different models to be used for different tasks
+    (intent matching, decision making, response generation, etc.)
+    
+    Usage:
+        ```python
+        # WorkflowAgent can accept either a single LLM or an LLMProvider
+        agent = WorkflowAgent(config=config, llm=llm_service)
+        
+        # LLMService implements this protocol
+        class LLMService:
+            def get_intent_llm(self) -> BaseChatModel: ...
+            def get_decision_llm(self) -> BaseChatModel: ...
+        ```
+    """
+    
+    def get_intent_llm(self) -> "BaseChatModel":
+        """Get LLM for intent matching tasks."""
+        ...
+    
+    def get_decision_llm(self) -> "BaseChatModel":
+        """Get LLM for decision/planning tasks."""
+        ...
+    
+    def get_response_llm(self) -> "BaseChatModel":
+        """Get LLM for response generation tasks."""
+        ...
+
+
+
+
     _verified_api_keys: bool = False
 
     model: str

@@ -32,32 +32,23 @@ class ConfigDocumentV2:
     """
     配置文档模型 (V2)
 
-    DB 级别配置缓存：
-    - 避免重复 LLM 解析
-    - 相同 chatbot/tenant 下的不同 sessions 复用
-    - 按 config_hash 索引
+    _id = chatbot_id（全局唯一），config_hash 用于缓存失效检测
     """
-    config_hash: str                         # _id (MD5 哈希)
-    tenant_id: str                           # 租户ID
-    chatbot_id: str                          # Chatbot ID
-
-    # 配置内容
-    raw_config: dict                         # 原始配置 JSON
-    parsed_config: dict                      # 解析后的配置（LLM 解析结果）
-
-    # 元数据
-    version: Optional[str] = None            # 配置版本
+    chatbot_id: str                          # _id
+    tenant_id: str
+    config_hash: str                         # 缓存失效检测
+    raw_config: dict
+    parsed_config: dict
+    version: Optional[str] = None
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
-
-    # 统计
-    access_count: int = 0                    # 访问次数
+    access_count: int = 0
 
     def to_dict(self) -> dict:
         return {
-            "_id": self.config_hash,
+            "_id": self.chatbot_id,
             "tenant_id": self.tenant_id,
-            "chatbot_id": self.chatbot_id,
+            "config_hash": self.config_hash,
             "raw_config": self.raw_config,
             "parsed_config": self.parsed_config,
             "version": self.version,
@@ -69,9 +60,9 @@ class ConfigDocumentV2:
     @classmethod
     def from_dict(cls, data: dict) -> "ConfigDocumentV2":
         return cls(
-            config_hash=data.get("_id") or data.get("config_hash"),
+            chatbot_id=data["_id"],
             tenant_id=data["tenant_id"],
-            chatbot_id=data["chatbot_id"],
+            config_hash=data.get("config_hash", ""),
             raw_config=data.get("raw_config", {}),
             parsed_config=data.get("parsed_config", {}),
             version=data.get("version"),

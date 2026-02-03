@@ -6,11 +6,16 @@
 2. Agent 实例管理（会话级）
 3. Timer 管理（会话级）
 4. 空闲会话回收
+5. 配置加载（按需，仅在创建 session 时）
+
+设计原则：
+- Session 存在 → 直接返回（快速路径）
+- Session 不存在 → 从 DB/HTTP 加载配置 → 创建 Agent → 创建 Session
 """
 
 import asyncio
 import logging
-from typing import Optional, Callable, Awaitable
+from typing import Optional, Callable, Awaitable, TYPE_CHECKING
 
 from bu_agent_sdk.agent.workflow_agent_v2 import WorkflowAgentV2
 from bu_agent_sdk.tools.actions import WorkflowConfigSchema
@@ -19,6 +24,9 @@ from bu_agent_sdk.llm.messages import UserMessage, AssistantMessage
 from api.services.v2.session_context import SessionContext, SessionTimer
 from api.services.repositories import RepositoryManager, MessageRepository
 from api.services.llm_service import LLMService
+
+if TYPE_CHECKING:
+    from api.services.database import Database
 
 logger = logging.getLogger(__name__)
 
@@ -32,18 +40,24 @@ class SessionManager:
     - Agent 实例管理（会话级）
     - Timer 管理（会话级）
     - 空闲会话自动回收
+    - 配置加载（按需，仅在创建 session 时从 DB/HTTP 加载）
+
+    设计原则：
+    - Session 存在 → 直接返回（快速路径，不加载配置）
+    - Session 不存在 → 加载配置 → 创建 Agent → 创建 Session
+    - 配置更新（config_hash 变化）→ 销毁旧 session → 创建新 session
 
     Usage:
         ```python
         session_mgr = SessionManager(repos=repos, llm_provider=llm_provider)
         await session_mgr.start()
 
-        # 获取或创建会话
+        # 获取或创建会话（内部处理配置加载）
         ctx = await session_mgr.get_or_create(
             session_id="sess_123",
             tenant_id="tenant_1",
             chatbot_id="bot_1",
-            config=config,
+            config_hash="abc123",
         )
 
         # 执行查询
@@ -57,24 +71,30 @@ class SessionManager:
     def __init__(
         self,
         repos: RepositoryManager,
+        database: "Database | None" = None,
         llm_provider: LLMService | None = None,
         idle_timeout: int = 1800,
         cleanup_interval: int = 60,
         max_sessions: int = 10000,
+        enable_llm_parsing: bool = True,
     ):
         """
         Args:
             repos: RepositoryManager
+            database: Database 实例（用于配置持久化）
             llm_provider: LLM 提供者
             idle_timeout: 空闲超时（秒），默认 30 分钟
             cleanup_interval: 清理间隔（秒）
             max_sessions: 最大会话数
+            enable_llm_parsing: 是否启用 LLM 增强解析
         """
         self._repos = repos
+        self._db = database
         self._llm_provider = llm_provider
         self._idle_timeout = idle_timeout
         self._cleanup_interval = cleanup_interval
         self._max_sessions = max_sessions
+        self._enable_llm_parsing = enable_llm_parsing
 
         # 会话池：session_id -> SessionContext
         self._sessions: dict[str, SessionContext] = {}
@@ -85,6 +105,9 @@ class SessionManager:
         # 清理任务
         self._cleanup_task: Optional[asyncio.Task] = None
         self._running = False
+
+        # HTTP 配置加载器（延迟初始化）
+        self._http_loader = None
 
         logger.info(
             f"SessionManager initialized: "
@@ -136,7 +159,7 @@ class SessionManager:
         session_id: str,
         tenant_id: str,
         chatbot_id: str,
-        config: WorkflowConfigSchema,
+        config_hash: str,
     ) -> SessionContext:
         """
         获取或创建会话上下文
@@ -145,36 +168,39 @@ class SessionManager:
             session_id: 会话 ID
             tenant_id: 租户 ID
             chatbot_id: Chatbot ID
-            config: 解析后的配置（由 ConfigLoader 提供）
+            config_hash: 配置哈希（用于检测配置更新）
 
         Returns:
             SessionContext 实例
 
-        Note:
-            DB 操作（创建会话记录、加载历史）与 Agent 创建并行执行，
-            不阻塞主流程。
+        设计：
+        - Session 存在且配置未变 → 直接返回（快速路径）
+        - Session 存在但配置变了 → 销毁旧 session → 创建新 session
+        - Session 不存在 → 从 DB/HTTP 加载配置 → 创建 Agent → 创建 Session
         """
         # 1. 检查现有会话（快速路径）
         if session_id in self._sessions:
             ctx = self._sessions[session_id]
-            ctx.touch()
-            return ctx
+            # 检查配置是否更新
+            if ctx.config_hash == config_hash:
+                ctx.touch()
+                return ctx
+            # 配置更新，销毁旧 session
+            logger.info(f"Config changed for session {session_id}, recreating")
+            await self.destroy(session_id)
 
         # 2. 检查容量
         if len(self._sessions) >= self._max_sessions:
             await self._evict_oldest()
 
-        # 3. 并行执行：Agent 创建 + DB 操作
-        #    - Agent 创建是 CPU 密集型，不依赖 DB
-        #    - DB 记录创建和历史加载可以并行
+        # 3. 加载配置
+        config = await self._load_config(config_hash, tenant_id, chatbot_id)
+
+        # 4. 并行执行：Agent 创建 + DB 操作
         agent_task = self._create_agent(config)
 
         if self._repos:
-            # 并行：创建 Agent + 创建 DB 记录 + 加载历史
-            # 注意：历史加载需要 agent 实例，所以先等 agent 创建完成
             agent = await agent_task
-
-            # 并行：DB 记录创建 + 历史加载
             await asyncio.gather(
                 self._ensure_session_record(session_id, tenant_id, chatbot_id),
                 self._load_history(agent, session_id),
@@ -183,21 +209,180 @@ class SessionManager:
         else:
             agent = await agent_task
 
-        # 4. 创建会话上下文
+        # 5. 创建会话上下文
         ctx = SessionContext(
             session_id=session_id,
             tenant_id=tenant_id,
             chatbot_id=chatbot_id,
             agent=agent,
+            config_hash=config_hash,
         )
 
-        # 5. 初始化 Timer
+        # 6. 初始化 Timer
         self._init_timer(ctx, config)
 
         self._sessions[session_id] = ctx
         logger.info(f"Session created: {session_id}")
 
         return ctx
+
+    async def _load_config(
+        self,
+        config_hash: str,
+        tenant_id: str,
+        chatbot_id: str,
+    ) -> WorkflowConfigSchema:
+        """
+        加载配置（DB → HTTP）
+
+        流程：
+        1. DB 命中且 hash 匹配 → 直接返回（access_count 自动 +1）
+        2. DB 未命中或 hash 不匹配 → HTTP 加载 → 解析 → 存储 DB → 返回
+
+        设计原则：
+        - 按 chatbot_id 索引，每个 chatbot 一条记录
+        - config_hash 用于缓存失效检测
+        - 访问统计自动递增
+        """
+        # 从 DB 加载（自动递增 access_count）
+        if self._repos:
+            doc = await self._repos.configs.get(chatbot_id, tenant_id, expected_hash=config_hash)
+            if doc:
+                logger.debug(f"Config DB HIT: {chatbot_id}, hash={config_hash[:12]}")
+                return WorkflowConfigSchema(**doc.parsed_config)
+
+        # DB 未命中或 hash 不匹配，从 HTTP 加载
+        logger.info(f"Config DB MISS: chatbot={chatbot_id}, hash={config_hash[:12]}")
+        return await self._load_config_from_http(config_hash, tenant_id, chatbot_id)
+
+    async def _load_config_from_http(
+        self,
+        config_hash: str,
+        tenant_id: str,
+        chatbot_id: str,
+    ) -> WorkflowConfigSchema:
+        """从 HTTP 加载配置并存储到 DB"""
+        from config.http_config import HttpConfigLoader, AgentConfigRequest
+        from api.services.v2.config_loader import StoredConfig
+
+        if self._http_loader is None:
+            self._http_loader = HttpConfigLoader(logger)
+
+        raw_config = await self._http_loader.load_config_from_http(
+            AgentConfigRequest(tenant_id=tenant_id, chatbot_id=chatbot_id)
+        )
+
+        config = await self._parse_config(raw_config, config_hash)
+
+        # 存储到 DB（解耦的独立操作）
+        await self._save_config_to_db(
+            tenant_id=tenant_id,
+            chatbot_id=chatbot_id,
+            config_hash=config_hash,
+            raw_config=raw_config,
+            parsed_config=config.model_dump(),
+        )
+
+        return config
+
+    async def _save_config_to_db(
+        self,
+        tenant_id: str,
+        chatbot_id: str,
+        config_hash: str,
+        raw_config: dict,
+        parsed_config: dict,
+    ) -> None:
+        """
+        存储配置到 DB（独立方法，便于复用和测试）
+        
+        按 chatbot_id 更新：
+        - 每个 chatbot 一条记录
+        - 更新时保留 created_at, 累加 access_count
+        """
+        if not self._repos:
+            return
+
+        try:
+            await self._repos.configs.upsert(
+                chatbot_id=chatbot_id,
+                tenant_id=tenant_id,
+                config_hash=config_hash,
+                raw_config=raw_config,
+                parsed_config=parsed_config,
+            )
+            logger.debug(f"Config stored: {chatbot_id}, hash={config_hash[:12]}")
+        except Exception as e:
+            # DB 存储失败不应阻塞主流程
+            logger.warning(f"Failed to store config to DB: {e}")
+
+    async def _parse_config(
+        self, raw_config: dict, config_hash: str
+    ) -> WorkflowConfigSchema:
+        """解析配置"""
+        import os
+
+        # KB 配置
+        kb_config = raw_config.get("kb_config", {})
+        if not kb_config and raw_config.get("retrieve_knowledge_url"):
+            kb_config = {
+                "enabled": True,
+                "retrieve_url": raw_config["retrieve_knowledge_url"],
+                "chatbot_id": raw_config.get("basic_settings", {}).get("chatbot_id", ""),
+                "auto_retrieve": True,
+            }
+
+        # 环境变量覆盖
+        max_iterations = int(
+            os.getenv("MAX_ITERATIONS", raw_config.get("max_iterations", 5))
+        )
+        iteration_strategy = os.getenv(
+            "ITERATION_STRATEGY", raw_config.get("iteration_strategy", "sop_driven")
+        )
+
+        # LLM 增强解析
+        llm_parsed = await self._llm_enhance(raw_config)
+
+        # 合并配置
+        final_config = {
+            "kb_config": kb_config,
+            "max_iterations": max_iterations,
+            "iteration_strategy": iteration_strategy,
+            **llm_parsed,
+            "system_actions": raw_config.get("system_actions"),
+            "agent_actions": raw_config.get("agent_actions"),
+        }
+
+        logger.info(
+            f"Config parsed: hash={config_hash[:12]}, "
+            f"kb={bool(kb_config)}, llm={self._enable_llm_parsing}"
+        )
+
+        return WorkflowConfigSchema(**final_config)
+
+    async def _llm_enhance(self, raw_config: dict) -> dict:
+        """LLM 增强解析"""
+        if not self._enable_llm_parsing:
+            return raw_config
+
+        try:
+            from bu_agent_sdk.llm.messages import UserMessage
+            from api.services.v2.config_loader import ConfigLoader
+
+            llm = self._get_llm()
+            # 复用 ConfigLoader 的 prompt 构建逻辑
+            loader = ConfigLoader.__new__(ConfigLoader)
+            prompt = loader._build_prompt(raw_config)
+
+            logger.info("Calling LLM for config enhancement...")
+            response = await llm.ainvoke(messages=[UserMessage(content=prompt)])
+            response_text = response.content or ""
+
+            return loader._parse_llm_response(response_text, raw_config)
+
+        except Exception as e:
+            logger.error(f"LLM enhancement failed: {e}, using original config")
+            return raw_config
 
     async def _ensure_session_record(
         self,

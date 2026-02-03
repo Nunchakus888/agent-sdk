@@ -3,7 +3,8 @@
 
 测试：
 - Database 管理器
-- ConfigLoader
+- ConfigDocumentV2 数据模型
+- ConfigRepository
 """
 
 import pytest
@@ -17,107 +18,122 @@ from api.services.database import (
     Database,
     get_database,
 )
-from api.services.v2.config_loader import StoredConfig, ConfigLoader
+from api.models.documents_v2 import ConfigDocumentV2
+from api.services.repositories import ConfigRepository
 
 
 # =============================================================================
-# StoredConfig 测试
+# ConfigDocumentV2 测试
 # =============================================================================
 
 
-class TestStoredConfig:
-    """StoredConfig 数据模型测试"""
+class TestConfigDocumentV2:
+    """ConfigDocumentV2 数据模型测试"""
 
-    def test_create_stored_config(self):
-        """测试创建 StoredConfig"""
-        config = StoredConfig(
-            config_hash="abc123",
-            tenant_id="tenant-1",
+    def test_create(self):
+        """测试创建"""
+        config = ConfigDocumentV2(
             chatbot_id="bot-1",
+            tenant_id="tenant-1",
+            config_hash="abc123",
             raw_config={"key": "value"},
             parsed_config={"parsed": True},
         )
-
-        assert config.config_hash == "abc123"
-        assert config.tenant_id == "tenant-1"
         assert config.chatbot_id == "bot-1"
-        assert config.raw_config == {"key": "value"}
-        assert config.parsed_config == {"parsed": True}
-        assert isinstance(config.created_at, datetime)
+        assert config.config_hash == "abc123"
+        assert config.access_count == 0
 
     def test_to_dict(self):
-        """测试转换为字典"""
-        config = StoredConfig(
-            config_hash="abc123",
-            tenant_id="tenant-1",
+        """测试 to_dict - _id = chatbot_id"""
+        config = ConfigDocumentV2(
             chatbot_id="bot-1",
-            raw_config={"key": "value"},
-            parsed_config={"parsed": True},
+            tenant_id="tenant-1",
+            config_hash="abc123",
+            raw_config={},
+            parsed_config={},
         )
-
         data = config.to_dict()
-
-        assert data["_id"] == "abc123"
-        assert data["tenant_id"] == "tenant-1"
-        assert data["chatbot_id"] == "bot-1"
-        assert data["raw_config"] == {"key": "value"}
-        assert data["parsed_config"] == {"parsed": True}
+        assert data["_id"] == "bot-1"
+        assert "chatbot_id" not in data  # 不重复存储
 
     def test_from_dict(self):
-        """测试从字典创建"""
+        """测试 from_dict"""
         data = {
-            "_id": "abc123",
+            "_id": "bot-1",
             "tenant_id": "tenant-1",
-            "chatbot_id": "bot-1",
-            "raw_config": {"key": "value"},
-            "parsed_config": {"parsed": True},
-            "created_at": datetime.utcnow(),
+            "config_hash": "abc123",
+            "raw_config": {},
+            "parsed_config": {},
+            "access_count": 5,
         }
-
-        config = StoredConfig.from_dict(data)
-
-        assert config.config_hash == "abc123"
-        assert config.tenant_id == "tenant-1"
+        config = ConfigDocumentV2.from_dict(data)
         assert config.chatbot_id == "bot-1"
+        assert config.access_count == 5
 
 
 # =============================================================================
-# ConfigLoader 测试
+# ConfigRepository 测试
 # =============================================================================
 
 
-class TestConfigLoader:
-    """ConfigLoader 测试"""
+class TestConfigRepository:
+    """ConfigRepository 测试"""
 
-    def test_create_without_database(self):
-        """测试创建 ConfigLoader（无数据库）"""
-        loader = ConfigLoader(database=None)
-        stats = loader.get_stats()
+    @pytest.mark.asyncio
+    async def test_upsert(self):
+        """测试 upsert"""
+        repo = ConfigRepository(db=None)
+        config = await repo.upsert(
+            chatbot_id="bot-1",
+            tenant_id="tenant-1",
+            config_hash="hash-1",
+            raw_config={},
+            parsed_config={},
+        )
+        assert config.chatbot_id == "bot-1"
+        assert config.access_count == 1
 
-        assert stats["l2_enabled"] is False
-        assert stats["llm_parsing"] is False
+    @pytest.mark.asyncio
+    async def test_get_with_access_count(self):
+        """测试 get 自动 access_count+1"""
+        repo = ConfigRepository(db=None)
+        await repo.upsert(
+            chatbot_id="bot-1",
+            tenant_id="tenant-1",
+            config_hash="hash-1",
+            raw_config={},
+            parsed_config={},
+        )
+        config = await repo.get("bot-1")
+        assert config.access_count == 2
 
-    def test_create_with_database(self):
-        """测试创建 ConfigLoader（有数据库）"""
-        mock_db = MagicMock()
-        loader = ConfigLoader(database=mock_db)
-        stats = loader.get_stats()
+    @pytest.mark.asyncio
+    async def test_get_with_hash_check(self):
+        """测试 get 带 hash 检查"""
+        repo = ConfigRepository(db=None)
+        await repo.upsert(
+            chatbot_id="bot-1",
+            tenant_id="tenant-1",
+            config_hash="hash-1",
+            raw_config={},
+            parsed_config={},
+        )
+        assert await repo.get("bot-1", expected_hash="hash-1") is not None
+        assert await repo.get("bot-1", expected_hash="wrong") is None
 
-        assert stats["l2_enabled"] is True
-
-    def test_invalidate(self):
-        """测试使配置失效"""
-        loader = ConfigLoader(database=None)
-        # 先设置一个配置到 L1
-        loader._l1.set("hash-1", MagicMock())
-
-        # 使其失效
-        result = loader.invalidate("hash-1")
-        assert result is True
-
-        # 再次失效应返回 False
-        result = loader.invalidate("hash-1")
-        assert result is False
+    @pytest.mark.asyncio
+    async def test_invalidate(self):
+        """测试 invalidate"""
+        repo = ConfigRepository(db=None)
+        await repo.upsert(
+            chatbot_id="bot-1",
+            tenant_id="tenant-1",
+            config_hash="hash-1",
+            raw_config={},
+            parsed_config={},
+        )
+        assert await repo.invalidate("bot-1") is True
+        assert await repo.invalidate("bot-1") is False
 
 
 # =============================================================================

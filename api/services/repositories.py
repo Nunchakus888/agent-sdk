@@ -55,87 +55,99 @@ class BaseRepository(ABC):
 
 
 class ConfigRepository(BaseRepository):
-    """
-    配置 Repository (V2)
-
-    DB 级别配置缓存：
-    - 避免重复 LLM 解析
-    - 相同 chatbot/tenant 下的不同 sessions 复用
-    - 按 config_hash 索引
-    """
+    """配置缓存 Repository - _id=chatbot_id, config_hash 用于失效检测, 查询自动 access_count+1"""
 
     def __init__(self, db: Database | None):
         super().__init__(db)
         self._memory_store: dict[str, "ConfigDocumentV2"] = {}
 
-    async def get(self, config_hash: str) -> Optional["ConfigDocumentV2"]:
-        """按 config_hash 获取配置"""
+    async def get(
+        self,
+        chatbot_id: str,
+        tenant_id: str,
+        expected_hash: Optional[str] = None,
+    ) -> Optional["ConfigDocumentV2"]:
+        """获取配置（自动 access_count+1），expected_hash 不匹配时返回 None"""
         from api.models import ConfigDocumentV2
 
         if self.is_persistent:
-            doc = await self._db.configs.find_one({"_id": config_hash})
-            if doc:
-                await self._db.configs.update_one(
-                    {"_id": config_hash},
-                    {"$inc": {"access_count": 1}, "$set": {"updated_at": utc_now()}}
-                )
-                return ConfigDocumentV2.from_dict(doc)
-            return None
+            doc = await self._db.configs.find_one_and_update(
+                {"_id": chatbot_id, "tenant_id": tenant_id},
+                {"$inc": {"access_count": 1}, "$set": {"updated_at": utc_now()}},
+                return_document=True,
+            )
+            if not doc:
+                return None
+            config = ConfigDocumentV2.from_dict(doc)
+            if expected_hash and config.config_hash != expected_hash:
+                return None
+            return config
         else:
-            config = self._memory_store.get(config_hash)
+            config = self._memory_store.get(chatbot_id)
             if config:
+                if expected_hash and config.config_hash != expected_hash:
+                    return None
                 config.access_count += 1
                 config.updated_at = utc_now()
             return config
 
-    async def set(
+    async def upsert(
         self,
-        config_hash: str,
-        tenant_id: str,
         chatbot_id: str,
+        tenant_id: str,
+        config_hash: str,
         raw_config: dict,
         parsed_config: dict,
-        version: Optional[str] = None,
     ) -> "ConfigDocumentV2":
-        """保存配置（upsert）"""
+        """保存或更新配置（保留 created_at, 累加 access_count）"""
         from api.models import ConfigDocumentV2
 
         now = utc_now()
+
+        if self.is_persistent:
+            await self._db.configs.update_one(
+                {"_id": chatbot_id},
+                {
+                    "$set": {
+                        "tenant_id": tenant_id,
+                        "config_hash": config_hash,
+                        "raw_config": raw_config,
+                        "parsed_config": parsed_config,
+                        "updated_at": now,
+                    },
+                    "$inc": {"access_count": 1},
+                    "$setOnInsert": {"created_at": now},
+                },
+                upsert=True,
+            )
+            logger.debug(f"Config upserted: {chatbot_id}, hash={config_hash[:12]}")
+
         doc = ConfigDocumentV2(
-            config_hash=config_hash,
-            tenant_id=tenant_id,
             chatbot_id=chatbot_id,
+            tenant_id=tenant_id,
+            config_hash=config_hash,
             raw_config=raw_config,
             parsed_config=parsed_config,
-            version=version,
             created_at=now,
             updated_at=now,
             access_count=1,
         )
 
-        if self.is_persistent:
-            # $set 排除 created_at（更新时不应改变创建时间）
-            update_data = {k: v for k, v in doc.to_dict().items() if k != "created_at"}
-            await self._db.configs.update_one(
-                {"_id": config_hash},
-                {"$set": update_data, "$setOnInsert": {"created_at": now}},
-                upsert=True,
-            )
-        else:
-            self._memory_store[config_hash] = doc
+        if not self.is_persistent:
+            existing = self._memory_store.get(chatbot_id)
+            if existing:
+                doc.created_at = existing.created_at
+                doc.access_count = existing.access_count + 1
+            self._memory_store[chatbot_id] = doc
 
         return doc
 
-    async def invalidate(self, config_hash: str) -> bool:
+    async def invalidate(self, chatbot_id: str) -> bool:
         """删除配置缓存"""
         if self.is_persistent:
-            result = await self._db.configs.delete_one({"_id": config_hash})
+            result = await self._db.configs.delete_one({"_id": chatbot_id})
             return result.deleted_count > 0
-        else:
-            if config_hash in self._memory_store:
-                del self._memory_store[config_hash]
-                return True
-            return False
+        return self._memory_store.pop(chatbot_id, None) is not None
 
 
 # =============================================================================
