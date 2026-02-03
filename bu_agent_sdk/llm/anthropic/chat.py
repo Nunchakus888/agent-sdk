@@ -1,5 +1,4 @@
 import logging
-import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -29,6 +28,7 @@ from httpx import Timeout
 
 from bu_agent_sdk.llm.anthropic.serializer import AnthropicMessageSerializer
 from bu_agent_sdk.llm.base import BaseChatModel, ToolChoice, ToolDefinition
+from bu_agent_sdk.llm.debug import is_debug_enabled, log_llm_request
 from bu_agent_sdk.llm.exceptions import ModelProviderError, ModelRateLimitError
 from bu_agent_sdk.llm.messages import BaseMessage, Function, ToolCall
 from bu_agent_sdk.llm.views import ChatInvokeCompletion, ChatInvokeUsage
@@ -294,6 +294,12 @@ class ChatAnthropic(BaseChatModel):
                 if anthropic_tool_choice is not None:
                     invoke_params["tool_choice"] = anthropic_tool_choice
 
+            # Log debug request if enabled
+            log_llm_request(
+                logger, self.model, anthropic_messages, tools, tool_choice,
+                system_prompt=system_prompt, params=invoke_params
+            )
+
             response = await self.get_client().messages.create(
                 model=self.model,
                 messages=anthropic_messages,
@@ -311,8 +317,8 @@ class ChatAnthropic(BaseChatModel):
 
             usage = self._get_usage(response)
 
-            # Log token usage if bu_agent_sdk_LLM_DEBUG is set
-            if usage and os.getenv("bu_agent_sdk_LLM_DEBUG"):
+            # Log token usage if debug enabled
+            if usage and is_debug_enabled():
                 cached = usage.prompt_cached_tokens or 0
                 input_tokens = usage.prompt_tokens - cached
                 logger.info(

@@ -3,7 +3,6 @@ import hashlib
 import inspect
 import json
 import logging
-import os
 import random
 import time
 from dataclasses import dataclass, field
@@ -15,6 +14,7 @@ from google.genai import types
 from google.genai.types import MediaModality
 
 from bu_agent_sdk.llm.base import BaseChatModel, ToolChoice, ToolDefinition
+from bu_agent_sdk.llm.debug import is_debug_enabled, log_llm_request
 from bu_agent_sdk.llm.exceptions import ModelProviderError
 from bu_agent_sdk.llm.google.serializer import GoogleMessageSerializer
 from bu_agent_sdk.llm.messages import BaseMessage, Function, ToolCall
@@ -430,6 +430,12 @@ class ChatGoogle(BaseChatModel):
         if google_tool_choice is not None:
             config["tool_config"] = google_tool_choice
 
+        # Log debug request if enabled
+        log_llm_request(
+            self.logger, self.model, contents, tools, tool_choice,
+            system_prompt=system_instruction, params=config
+        )
+
         async def _make_api_call():
             start_time = time.time()
             self.logger.debug(f"🚀 Starting API call to {self.model}")
@@ -456,8 +462,8 @@ class ChatGoogle(BaseChatModel):
 
                 usage = self._get_usage(response)
 
-                # Log token usage if bu_agent_sdk_LLM_DEBUG is set
-                if usage and os.getenv("bu_agent_sdk_LLM_DEBUG"):
+                # Log token usage if debug enabled
+                if usage and is_debug_enabled():
                     cached = usage.prompt_cached_tokens or 0
                     input_tokens = usage.prompt_tokens - cached
                     self.logger.info(

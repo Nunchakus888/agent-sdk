@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from bu_agent_sdk.llm.base import ToolDefinition
 from bu_agent_sdk.tools.decorator import Tool, ToolContent
@@ -63,10 +63,24 @@ class EndpointConfig(BaseModel):
         default_factory=lambda: {"Content-Type": "application/json"},
         description="HTTP headers",
     )
-    body: dict[str, Any] | None = Field(
+    body: dict[str, Any] | list[Any] | None = Field(
         default=None,
         description="Request body template with {param} placeholders",
     )
+
+    @field_validator("body", mode="before")
+    @classmethod
+    def parse_body_string(cls, v: Any) -> dict[str, Any] | list[Any] | None:
+        """Handle body as JSON string (e.g., '{}' or '[]' instead of {} or [])"""
+        if v is None:
+            return None
+        if isinstance(v, str):
+            try:
+                return json.loads(v) if v.strip() else None
+            except json.JSONDecodeError:
+                return None
+        return v
+
     query_params: dict[str, str] | None = Field(
         default=None,
         description="Query parameters template with {param} placeholders",

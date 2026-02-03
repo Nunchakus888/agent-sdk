@@ -6,11 +6,11 @@
 
 from api.services.database.database import Database, get_database
 from api.services.database.config import DB_NAME, INDEX_DEFINITIONS
-from api.models.collections import COLLECTIONS
+from api.services.database.collections import COLLECTIONS
 
 __all__ = [
-    "DB_NAME",
     "COLLECTIONS",
+    "DB_NAME",
     "Database",
     "get_database",
     "INDEX_DEFINITIONS",

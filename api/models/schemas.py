@@ -5,7 +5,7 @@ API 请求/响应模型
 """
 
 from typing import Any, Dict, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class QueryRequest(BaseModel):
@@ -25,8 +25,8 @@ class QueryRequest(BaseModel):
     autofill_params: Dict[str, Any] = Field(default_factory=dict, description="自动填充参数")
     session_title: Optional[str] = Field(default=None, description="会话标题")
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "message": "Hello, I need help with my order",
                 "customer_id": "cust_123xy",
@@ -40,6 +40,7 @@ class QueryRequest(BaseModel):
                 "session_title": "Order Inquiry"
             }
         }
+    )
 
 
 class QueryResponse(BaseModel):
@@ -49,18 +50,17 @@ class QueryResponse(BaseModel):
     message: str = Field(..., description="Agent响应消息")
     status: str = Field(..., description="状态：success | error")
     agent_id: Optional[str] = Field(default=None, description="Agent ID")
-    config_hash: Optional[str] = Field(default=None, description="配置哈希")
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "session_id": "68d510aedff9455e5b019b3e",
                 "message": "您的订单正在处理中，预计明天送达。",
                 "status": "success",
                 "agent_id": "workflow_agent_68d510aedff9455e5b019b3e",
-                "config_hash": "abc123def456"
             }
         }
+    )
 
 
 class SessionInfo(BaseModel):
@@ -77,8 +77,8 @@ class SessionInfo(BaseModel):
     created_at: Optional[str] = Field(default=None, description="创建时间")
     updated_at: Optional[str] = Field(default=None, description="更新时间")
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "session_id": "68d510aedff9455e5b019b3e",
                 "chatbot_id": "68d510aedff9455e5b019b3e",
@@ -92,6 +92,7 @@ class SessionInfo(BaseModel):
                 "updated_at": "2026-01-23T10:30:00Z"
             }
         }
+    )
 
 
 class HealthResponse(BaseModel):
@@ -103,8 +104,8 @@ class HealthResponse(BaseModel):
     version: str = Field(..., description="API 版本")
     uptime: Optional[float] = Field(default=None, description="运行时间（秒）")
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "status": "healthy",
                 "active_sessions": 5,
@@ -113,6 +114,7 @@ class HealthResponse(BaseModel):
                 "uptime": 3600.5
             }
         }
+    )
 
 
 class ErrorResponse(BaseModel):
@@ -123,8 +125,8 @@ class ErrorResponse(BaseModel):
     detail: Optional[str] = Field(default=None, description="详细信息")
     session_id: Optional[str] = Field(default=None, description="会话ID")
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "error": "ValueError",
                 "message": "Invalid session_id",
@@ -132,6 +134,7 @@ class ErrorResponse(BaseModel):
                 "session_id": "68d510aedff9455e5b019b3e"
             }
         }
+    )
 
 
 class AgentStats(BaseModel):
@@ -147,8 +150,8 @@ class AgentStats(BaseModel):
     created_at: str = Field(..., description="创建时间")
     updated_at: str = Field(..., description="更新时间")
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "agent_id": "workflow_agent_68d510aedff9455e5b019b3e",
                 "chatbot_id": "68d510aedff9455e5b019b3e",
@@ -161,6 +164,7 @@ class AgentStats(BaseModel):
                 "updated_at": "2026-01-23T10:30:00Z"
             }
         }
+    )
 
 
 # =============================================================================
@@ -182,8 +186,8 @@ class ChatResponseDTO(BaseModel):
     correlation_id: Optional[str] = Field(default=None, description="关联ID")
     duration: Optional[float] = Field(default=None, description="处理耗时（秒）")
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "status": 200,
                 "code": 0,
@@ -196,6 +200,7 @@ class ChatResponseDTO(BaseModel):
                 "duration": 1.25
             }
         }
+    )
 
 
 class ChatAsyncResponse(BaseModel):
@@ -207,8 +212,8 @@ class ChatAsyncResponse(BaseModel):
     correlation_id: str = Field(..., description="关联ID，用于追踪请求")
     session_id: str = Field(..., description="会话ID")
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "status": 202,
                 "code": 0,
@@ -217,3 +222,4 @@ class ChatAsyncResponse(BaseModel):
                 "session_id": "68d510aedff9455e5b019b3e"
             }
         }
+    )

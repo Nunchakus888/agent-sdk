@@ -1,410 +1,260 @@
 """
-依赖注入容器
+应用上下文容器
 
-提供全局服务容器和依赖注入，支持：
-- LLMService 单例（模型服务）
-- WorkflowEngine 单例（统一的工作流引擎）
-- AgentManager 单例（Agent 生命周期管理）
-- TaskManager 单例（协程任务取消机制）
-- Database 单例（数据库管理）
-- RepositoryManager 单例（数据访问层）
+设计原则：
+- 使用 AppContext 类封装所有服务实例，避免全局变量散落
+- 单例模式通过类变量实现，保证全局唯一
+- 清晰的生命周期管理（create / shutdown）
+- 与 FastAPI 依赖注入系统兼容
+- 易于测试（可以创建独立的上下文实例）
 """
 
-from typing import Annotated, Any
 import logging
+import os
+from dataclasses import dataclass, field
+from typing import Annotated, Any, TYPE_CHECKING
 
 from fastapi import Depends
 
-from bu_agent_sdk.workflow.engine import WorkflowEngine
-from api.services import AgentManager
-from api.services.task_manager import TaskManager
-from api.services.database import DB_NAME, Database, get_database
+from api.services.database import DB_NAME, Database, get_database as create_database
 from api.services.repositories import RepositoryManager, create_repository_manager
-from api.services.llm_service import LLMService, LLMConfig, ModelTask
+from api.services.llm_service import LLMService
+
+if TYPE_CHECKING:
+    from api.services.v2 import ConfigLoader, SessionManager
 
 logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# 全局状态（单例模式）
-# =============================================================================
-
-_workflow_engine: WorkflowEngine | None = None
-_mongo_client: Any | None = None
-_agent_manager: AgentManager | None = None
-_task_manager: TaskManager | None = None
-_database: Database | None = None
-_repository_manager: RepositoryManager | None = None
-
-
-# =============================================================================
-# LLMService 依赖注入
+# 配置
 # =============================================================================
 
 
-def initialize_llm_service(config: LLMConfig | None = None) -> LLMService:
-    """
-    初始化 LLMService（单例）
+@dataclass
+class AppConfig:
+    """应用配置"""
 
-    Args:
-        config: LLM 配置，默认从环境变量加载
+    # Database
+    mongodb_uri: str | None = None
+    mongodb_db: str = DB_NAME
 
-    Returns:
-        LLMService 实例
-    """
-    return LLMService.initialize(config)
+    # ConfigLoader
+    cache_size: int = 100
+    cache_ttl: int = 3600
+    enable_llm_parsing: bool = False
 
+    # SessionManager
+    idle_timeout: int = 1800
+    cleanup_interval: int = 60
+    max_sessions: int = 10000
 
-def get_llm_service() -> LLMService:
-    """获取 LLMService 实例（依赖注入）"""
-    return LLMService.get_instance()
-
-
-def shutdown_llm_service() -> None:
-    """关闭 LLMService"""
-    LLMService.shutdown()
-
-
-LLMServiceDep = Annotated[LLMService, Depends(get_llm_service)]
-
-
-# =============================================================================
-# WorkflowEngine 依赖注入
-# =============================================================================
-
-
-async def initialize_workflow_engine(
-    mongodb_uri: str | None = None,
-    db_name: str = DB_NAME,
-    config_dir: str = "config",
-    max_agents: int = 100,
-    agent_ttl: int = 3600,
-    idle_timeout: int = 300,
-    cleanup_interval: int = 60,
-) -> WorkflowEngine:
-    """
-    初始化 WorkflowEngine（单例）
-
-    Args:
-        mongodb_uri: MongoDB URI（可选，启用持久化模式）
-        db_name: 数据库名称
-        config_dir: 配置文件目录
-        max_agents: 最大缓存 Agent 数量
-        agent_ttl: Agent TTL（秒）
-        idle_timeout: 空闲超时（秒）
-        cleanup_interval: 清理间隔（秒）
-
-    Returns:
-        WorkflowEngine 实例
-    """
-    global _workflow_engine, _mongo_client
-
-    if _workflow_engine is not None:
-        return _workflow_engine
-
-    # 使用 LLMService 创建 LLM 工厂（复用连接）
-    llm_service = get_llm_service()
-    llm_factory = lambda: llm_service.get_decision_llm()
-
-    # MongoDB 客户端（可选）
-    mongo_client = None
-    if mongodb_uri:
-        from motor.motor_asyncio import AsyncIOMotorClient
-        _mongo_client = AsyncIOMotorClient(mongodb_uri)
-        await _mongo_client.admin.command("ping")
-        mongo_client = _mongo_client
-
-    # 创建 WorkflowEngine
-    _workflow_engine = WorkflowEngine(
-        llm_factory=llm_factory,
-        mongo_client=mongo_client,
-        db_name=db_name,
-        config_dir=config_dir,
-        max_agents=max_agents,
-        agent_ttl=agent_ttl,
-        idle_timeout=idle_timeout,
-        cleanup_interval=cleanup_interval,
-    )
-
-    await _workflow_engine.init()
-    return _workflow_engine
-
-
-def get_workflow_engine() -> WorkflowEngine:
-    """
-    获取 WorkflowEngine 实例（依赖注入）
-
-    Returns:
-        WorkflowEngine 实例
-
-    Raises:
-        RuntimeError: 如果 WorkflowEngine 未初始化
-    """
-    if _workflow_engine is None:
-        raise RuntimeError(
-            "WorkflowEngine not initialized. Call initialize_workflow_engine() first."
+    @classmethod
+    def from_env(cls) -> "AppConfig":
+        """从环境变量创建配置"""
+        return cls(
+            mongodb_uri=os.getenv("MONGODB_URI"),
+            mongodb_db=os.getenv("MONGODB_DB", DB_NAME),
+            cache_size=int(os.getenv("CONFIG_CACHE_SIZE", "100")),
+            cache_ttl=int(os.getenv("CONFIG_CACHE_TTL", "3600")),
+            enable_llm_parsing=os.getenv("ENABLE_LLM_PARSING", "").lower() == "true",
+            idle_timeout=int(os.getenv("SESSION_IDLE_TIMEOUT", "1800")),
+            cleanup_interval=int(os.getenv("SESSION_CLEANUP_INTERVAL", "60")),
+            max_sessions=int(os.getenv("MAX_SESSIONS", "10000")),
         )
-    return _workflow_engine
-
-
-async def shutdown_workflow_engine() -> None:
-    """关闭 WorkflowEngine"""
-    global _workflow_engine, _mongo_client
-
-    if _workflow_engine is not None:
-        await _workflow_engine.shutdown()
-        _workflow_engine = None
-
-    if _mongo_client is not None:
-        _mongo_client.close()
-        _mongo_client = None
 
 
 # =============================================================================
-# AgentManager 依赖注入
+# 应用上下文
 # =============================================================================
 
 
-def get_mongo_db(db_name: str = DB_NAME) -> Any | None:
+@dataclass
+class AppContext:
     """
-    获取 MongoDB 数据库实例（复用全局连接）
-    
-    Args:
-        db_name: 数据库名称
-    
-    Returns:
-        MongoDB 数据库实例，未启用时返回 None
+    应用上下文容器
+
+    封装所有服务实例，提供统一的生命周期管理。
+
+    Usage:
+        ```python
+        ctx = await AppContext.create()
+        await ctx.session_manager.start()
+
+        # 使用服务
+        config = await ctx.config_loader.load(...)
+        session = await ctx.session_manager.get_or_create(...)
+
+        # 关闭
+        await ctx.shutdown()
+        ```
     """
-    if _mongo_client is not None:
-        return _mongo_client[db_name]
-    return None
 
+    # 基础设施
+    mongo_client: Any = field(default=None, repr=False)
+    database: Database | None = None
+    repository_manager: RepositoryManager | None = None
 
-def initialize_agent_manager(
-    config_dir: str = "config",
-    idle_timeout: int = 600,
-    cleanup_interval: int = 60,
-    enable_llm_parsing: bool = False,
-    db_name: str = DB_NAME,
-) -> AgentManager:
-    """
-    初始化 AgentManager（单例）
-    
-    自动复用 WorkflowEngine 的 MongoDB 连接（如已启用）
-    
-    Args:
-        config_dir: 配置文件目录
-        idle_timeout: 空闲超时（秒）
-        cleanup_interval: 清理间隔（秒）
-        enable_llm_parsing: 是否启用 LLM 配置解析
-        db_name: MongoDB 数据库名称
-    
-    Returns:
-        AgentManager 实例
-    """
-    global _agent_manager
+    # 业务服务
+    config_loader: "ConfigLoader | None" = None
+    session_manager: "SessionManager | None" = None
 
-    if _agent_manager is not None:
-        return _agent_manager
+    # 单例
+    _instance: "AppContext | None" = field(default=None, init=False, repr=False)
 
-    # 复用全局 MongoDB 连接
-    mongo_db = get_mongo_db(db_name)
+    @classmethod
+    async def create(cls, config: AppConfig | None = None) -> "AppContext":
+        """创建并初始化应用上下文"""
+        if cls._instance is not None:
+            return cls._instance
 
-    _agent_manager = AgentManager(
-        config_dir=config_dir,
-        idle_timeout=idle_timeout,
-        cleanup_interval=cleanup_interval,
-        enable_llm_parsing=enable_llm_parsing,
-        mongo_db=mongo_db,
-    )
+        config = config or AppConfig.from_env()
+        ctx = cls()
 
-    return _agent_manager
+        # 初始化服务
+        LLMService.initialize()
+        await ctx._init_database(config)
+        ctx._init_repository_manager()
+        ctx._init_services(config)
 
+        cls._instance = ctx
+        logger.info("AppContext initialized")
+        return ctx
 
-def get_agent_manager() -> AgentManager:
-    """
-    获取 AgentManager 实例（依赖注入）
+    async def _init_database(self, config: AppConfig) -> None:
+        """初始化数据库"""
+        if not config.mongodb_uri:
+            logger.info("Database: memory mode (set MONGODB_URI to enable MongoDB)")
+            return
 
-    Returns:
-        AgentManager 实例
-
-    Raises:
-        RuntimeError: 如果 AgentManager 未初始化
-    """
-    if _agent_manager is None:
-        raise RuntimeError(
-            "AgentManager not initialized. Call initialize_agent_manager() first."
-        )
-    return _agent_manager
-
-
-async def shutdown_agent_manager() -> None:
-    """关闭 AgentManager"""
-    global _agent_manager
-
-    if _agent_manager is not None:
-        await _agent_manager.stop_cleanup()
-        _agent_manager = None
-
-
-# =============================================================================
-# 类型别名（方便使用）
-# =============================================================================
-
-WorkflowEngineDep = Annotated[WorkflowEngine, Depends(get_workflow_engine)]
-AgentManagerDep = Annotated[AgentManager, Depends(get_agent_manager)]
-
-
-# =============================================================================
-# TaskManager 依赖注入（协程任务取消机制）
-# =============================================================================
-
-
-def initialize_task_manager() -> TaskManager:
-    """
-    初始化 TaskManager（单例）
-
-    Returns:
-        TaskManager 实例
-    """
-    global _task_manager
-
-    if _task_manager is not None:
-        return _task_manager
-
-    _task_manager = TaskManager()
-    return _task_manager
-
-
-def get_task_manager() -> TaskManager:
-    """
-    获取 TaskManager 实例（依赖注入）
-
-    Returns:
-        TaskManager 实例
-
-    Raises:
-        RuntimeError: 如果 TaskManager 未初始化
-    """
-    if _task_manager is None:
-        raise RuntimeError(
-            "TaskManager not initialized. Call initialize_task_manager() first."
-        )
-    return _task_manager
-
-
-async def shutdown_task_manager() -> None:
-    """关闭 TaskManager"""
-    global _task_manager
-
-    if _task_manager is not None:
-        await _task_manager.shutdown()
-        _task_manager = None
-
-
-TaskManagerDep = Annotated[TaskManager, Depends(get_task_manager)]
-
-
-# =============================================================================
-# Database 依赖注入
-# =============================================================================
-
-
-async def initialize_database(db_name: str = DB_NAME) -> Database | None:
-    """
-    初始化 Database（单例）
-
-    自动复用全局 MongoDB 连接，并创建索引
-
-    Args:
-        db_name: 数据库名称
-
-    Returns:
-        Database 实例，未启用 MongoDB 时返回 None
-    """
-    global _database
-
-    if _database is not None:
-        logger.info(f"Database already initialized: {db_name}")
-        return _database
-
-    if _mongo_client is None:
-        logger.debug("MongoDB client not available, database initialization skipped")
-        return None
-
-    try:
-        # 测试连接
-        await _mongo_client.admin.command("ping")
-        logger.info(f"MongoDB connection verified, initializing database: {db_name}")
-    except Exception as e:
-        logger.error(f"Failed to connect to MongoDB: {e}", exc_info=True)
-        return None
-
-    _database = get_database(_mongo_client, db_name)
-
-    # 创建索引
-    if _database:
         try:
-            await _database.ensure_indexes()
-            logger.info(f"Database initialized successfully: {db_name}")
+            from datetime import timezone
+            from motor.motor_asyncio import AsyncIOMotorClient
+            from bson.codec_options import CodecOptions
+
+            logger.info(f"Connecting to MongoDB: {config.mongodb_uri}")
+
+            # 配置时区感知：读取时返回带 UTC 时区的 datetime
+            # 详见 docs/architecture/datetime-best-practices.md
+            self.mongo_client = AsyncIOMotorClient(
+                config.mongodb_uri,
+                serverSelectionTimeoutMS=3000,  # 3秒超时，快速失败
+                tz_aware=True,                  # 返回带时区的 datetime
+                tzinfo=timezone.utc,            # 使用 UTC 时区
+            )
+            await self.mongo_client.admin.command("ping")
+
+            self.database = create_database(self.mongo_client, config.mongodb_db)
+            if self.database:
+                await self.database.ensure_indexes()
+                logger.info(f"Database: mongodb/{config.mongodb_db}")
+
         except Exception as e:
-            logger.error(f"Failed to create database indexes: {e}", exc_info=True)
-            # 即使索引创建失败，也返回 database 实例，因为连接是成功的
+            logger.warning(
+                f"MongoDB connection failed ({config.mongodb_uri}): {e}. "
+                f"Falling back to memory mode. Set DISABLE_MONGODB=true to suppress this warning."
+            )
+            self.mongo_client = None
+            self.database = None
 
-    return _database
+    def _init_repository_manager(self) -> None:
+        """初始化 RepositoryManager"""
+        self.repository_manager = create_repository_manager(self.database)
 
+    def _init_services(self, config: AppConfig) -> None:
+        """初始化业务服务"""
+        from api.services.v2 import ConfigLoader, SessionManager
 
-def get_db() -> Database | None:
-    """
-    获取 Database 实例（依赖注入）
+        self.config_loader = ConfigLoader(
+            database=self.database,
+            cache_size=config.cache_size,
+            cache_ttl=config.cache_ttl,
+            enable_llm_parsing=config.enable_llm_parsing,
+        )
 
-    Returns:
-        Database 实例，未启用时返回 None
-    """
-    return _database
+        self.session_manager = SessionManager(
+            repos=self.repository_manager,
+            llm_provider=LLMService.get_instance(),
+            idle_timeout=config.idle_timeout,
+            cleanup_interval=config.cleanup_interval,
+            max_sessions=config.max_sessions,
+        )
 
+    async def shutdown(self) -> None:
+        """关闭所有服务"""
+        if self.session_manager:
+            await self.session_manager.stop()
+            self.session_manager = None
 
-DatabaseDep = Annotated[Database | None, Depends(get_db)]
+        self.config_loader = None
+
+        if self.mongo_client:
+            self.mongo_client.close()
+            self.mongo_client = None
+
+        AppContext._instance = None
+        logger.info("AppContext shutdown")
+
+    @classmethod
+    def get_instance(cls) -> "AppContext":
+        """获取单例"""
+        if cls._instance is None:
+            raise RuntimeError("AppContext not initialized")
+        return cls._instance
+
+    @classmethod
+    def reset(cls) -> None:
+        """重置单例（测试用）"""
+        cls._instance = None
 
 
 # =============================================================================
-# RepositoryManager 依赖注入
+# FastAPI 依赖注入
 # =============================================================================
 
+from api.services.v2 import ConfigLoader, SessionManager
 
-def initialize_repository_manager() -> RepositoryManager:
-    """
-    初始化 RepositoryManager（单例）
 
-    自动使用全局 Database 实例
+def get_app_context() -> AppContext:
+    return AppContext.get_instance()
 
-    Returns:
-        RepositoryManager 实例
-    """
-    global _repository_manager
 
-    if _repository_manager is not None:
-        return _repository_manager
-
-    _repository_manager = create_repository_manager(_database)
-    return _repository_manager
+def get_database() -> Database | None:
+    return AppContext.get_instance().database
 
 
 def get_repository_manager() -> RepositoryManager:
-    """
-    获取 RepositoryManager 实例（依赖注入）
-
-    Returns:
-        RepositoryManager 实例
-
-    Raises:
-        RuntimeError: 如果 RepositoryManager 未初始化
-    """
-    if _repository_manager is None:
-        raise RuntimeError(
-            "RepositoryManager not initialized. Call initialize_repository_manager() first."
-        )
-    return _repository_manager
+    ctx = AppContext.get_instance()
+    if ctx.repository_manager is None:
+        raise RuntimeError("RepositoryManager not initialized")
+    return ctx.repository_manager
 
 
+def get_config_loader() -> ConfigLoader:
+    ctx = AppContext.get_instance()
+    if ctx.config_loader is None:
+        raise RuntimeError("ConfigLoader not initialized")
+    return ctx.config_loader
+
+
+def get_session_manager() -> SessionManager:
+    ctx = AppContext.get_instance()
+    if ctx.session_manager is None:
+        raise RuntimeError("SessionManager not initialized")
+    return ctx.session_manager
+
+
+def get_llm_service() -> LLMService:
+    return LLMService.get_instance()
+
+
+# =============================================================================
+# 依赖类型别名
+# =============================================================================
+
+AppContextDep = Annotated[AppContext, Depends(get_app_context)]
+DatabaseDep = Annotated[Database | None, Depends(get_database)]
 RepositoryManagerDep = Annotated[RepositoryManager, Depends(get_repository_manager)]
+ConfigLoaderDep = Annotated[ConfigLoader, Depends(get_config_loader)]
+SessionManagerDep = Annotated[SessionManager, Depends(get_session_manager)]
+LLMServiceDep = Annotated[LLMService, Depends(get_llm_service)]

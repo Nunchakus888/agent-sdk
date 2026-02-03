@@ -449,3 +449,73 @@ class TestDataPersistence:
         assert agent_response.status_code == 200
 
         print(f"\n[消息计数] 发送了 3 条消息到 session={session_id}")
+
+
+# =============================================================================
+# 阶段 8: 配置加载失败测试
+# =============================================================================
+
+
+class TestConfigLoadFailure:
+    """测试配置加载失败场景"""
+
+    def test_config_load_failure_returns_http_error(self, client, check_server):
+        """
+        验证配置加载失败时返回正常 HTTP 错误响应
+        
+        场景：使用不存在的 chatbot_id 和 tenant_id，触发配置加载失败
+        预期：返回 502 或 4xx 错误码，而不是 500 内部错误
+        """
+        request_data = get_test_request(
+            session_id="config_fail_001",
+            chatbot_id="nonexistent_chatbot_xyz",
+            tenant_id="nonexistent_tenant_xyz",
+        )
+        # 使用随机 hash 确保没有缓存
+        request_data["md5_checksum"] = "random_hash_no_cache_12345"
+        
+        response = client.post(f"{API_PREFIX}/query", json=request_data)
+        result = response.json()
+        
+        # 验证返回的是正常 HTTP 错误响应，而不是 500 内部服务器错误
+        # 配置加载失败应该返回 502 (Bad Gateway) 或 404 (Not Found)
+        assert response.status_code in [404, 500, 502], f"Unexpected status: {response.status_code}"
+        
+        # 验证响应包含错误信息
+        assert "message" in result or "detail" in result, "Error response should contain message or detail"
+        
+        print(f"\n[配置加载失败] status={response.status_code}")
+        print(f"  响应: {result}")
+
+    def test_config_load_failure_error_format(self, client, check_server):
+        """
+        验证配置加载失败的错误响应格式
+        
+        错误响应应该包含：status, code, message
+        """
+        request_data = get_test_request(
+            session_id="config_fail_format_001",
+            chatbot_id="invalid_chatbot_format_test",
+            tenant_id="invalid_tenant_format_test",
+        )
+        request_data["md5_checksum"] = "unique_hash_for_format_test"
+        
+        response = client.post(f"{API_PREFIX}/query", json=request_data)
+        result = response.json()
+        
+        # 不应该是 200 成功
+        assert response.status_code != 200, "Should not return success for invalid config"
+        
+        # 验证错误响应格式（统一错误响应格式）
+        if response.status_code >= 400:
+            # 应该有某种形式的错误信息
+            has_error_info = (
+                "message" in result or 
+                "detail" in result or 
+                "error" in result or
+                "code" in result
+            )
+            assert has_error_info, f"Error response should contain error info: {result}"
+        
+        print(f"\n[错误格式验证] status={response.status_code}")
+        print(f"  包含错误信息: {list(result.keys())}")

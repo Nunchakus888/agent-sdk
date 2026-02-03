@@ -1,18 +1,10 @@
 """
-业务服务模块 v3
+业务服务模块 V2
 
-提供 Agent 管理、配置存储、数据库管理、任务管理、LLM 服务等功能
-5表设计：configs, sessions, messages, events, usages
+提供 Agent 管理、配置存储、数据库管理等功能
+6表设计：configs, sessions, messages, tool_calls, usages, timers
 """
 
-from api.services.agent_manager import AgentManager, AgentInfo, ParsedConfig
-from api.services.config_store import (
-    ConfigStore,
-    StoredConfig,
-    MemoryConfigStore,
-    MongoConfigStore,
-    create_config_store,
-)
 from api.services.database import (
     DB_NAME,
     COLLECTIONS,
@@ -20,64 +12,48 @@ from api.services.database import (
     get_database,
 )
 from api.models import (
-    SessionDocument,
-    MessageDocument,
+    # V2 模型
+    ConfigDocumentV2,
+    SessionDocumentV2,
+    MessageDocumentV2,
+    ToolCallDocumentV2,
+    UsageDocumentV2,
+    TimerDocumentV2,
+    # 枚举
     MessageRole,
-    EventDocument,
-    EventType,
-    EventStatus,
-    TokenDocument,
-    TokenDetail,
-    TokenSummary,
 )
-from api.services.task_manager import TaskManager
 from api.services.repositories import (
     RepositoryManager,
+    ConfigRepository,
     SessionRepository,
     MessageRepository,
-    EventRepository,
+    ToolCallRepository,
     UsageRepository,
+    TimerRepository,
     create_repository_manager,
 )
-from api.services.llm_service import LLMService, LLMConfig, ModelTask
 
 __all__ = [
-    # LLM 服务
-    "LLMService",
-    "LLMConfig",
-    "ModelTask",
-    # Agent 管理
-    "AgentManager",
-    "AgentInfo",
-    "ParsedConfig",
-    # 配置存储
-    "ConfigStore",
-    "StoredConfig",
-    "MemoryConfigStore",
-    "MongoConfigStore",
-    "create_config_store",
     # 数据库
     "DB_NAME",
     "COLLECTIONS",
     "Database",
     "get_database",
-    # v3 核心模型
-    "SessionDocument",
-    "MessageDocument",
+    # V2 模型
+    "ConfigDocumentV2",
+    "SessionDocumentV2",
+    "MessageDocumentV2",
+    "ToolCallDocumentV2",
+    "UsageDocumentV2",
+    "TimerDocumentV2",
     "MessageRole",
-    "EventDocument",
-    "EventType",
-    "EventStatus",
-    "TokenDocument",
-    "TokenDetail",
-    "TokenSummary",
-    # v3 Repository
+    # V2 Repository
     "RepositoryManager",
+    "ConfigRepository",
     "SessionRepository",
     "MessageRepository",
-    "EventRepository",
+    "ToolCallRepository",
     "UsageRepository",
+    "TimerRepository",
     "create_repository_manager",
-    # 任务管理
-    "TaskManager",
 ]

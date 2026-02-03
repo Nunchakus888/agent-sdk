@@ -1,5 +1,5 @@
 """
-健康检查路由模块
+健康检查路由模块 (V2)
 
 提供服务健康状态检查接口
 """
@@ -7,7 +7,7 @@
 from fastapi import APIRouter
 
 from api.models import HealthResponse
-from api.container import AgentManagerDep
+from api.container import SessionManagerDep
 
 
 def create_router() -> APIRouter:
@@ -23,20 +23,20 @@ def create_router() -> APIRouter:
         "/health",
         response_model=HealthResponse,
         summary="健康检查",
-        description="检查 API 服务和 AgentManager 的健康状态",
+        description="检查 API 服务和 SessionManager 的健康状态",
     )
-    async def health_check(manager: AgentManagerDep):
+    async def health_check(session_manager: SessionManagerDep):
         """健康检查"""
         from api import __version__
 
-        stats = manager.get_stats()
+        stats = session_manager.get_stats()
 
         return HealthResponse(
             status="healthy",
-            active_sessions=stats["active_sessions"],
-            active_agents=stats["active_agents"],
+            active_sessions=stats.get("active_sessions", 0),
+            active_agents=stats.get("active_agents", 0),
             version=__version__,
-            uptime=stats["uptime"],
+            uptime=stats.get("uptime", 0),
         )
 
     return router

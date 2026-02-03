@@ -319,13 +319,18 @@ def setup_logging(
     # 日志格式：带时间戳的简洁格式
     # timestamp [level] [cid] [sid:scope] message
     log_format = "%(asctime)s [%(levelname)-8s] %(ctx)s %(message)s"
-    date_format = "%Y-%m-%dT%H:%M:%S.%fZ"
+    date_format = "%Y/%m/%d/%H:%M:%S.%fZ"
     formatter = ContextFormatter(log_format, datefmt=date_format)
 
     # 获取根日志器
     root_logger = logging.getLogger()
     root_logger.setLevel(level)
     root_logger.handlers.clear()
+
+    # 降低第三方库的日志级别，避免冗长输出
+    logging.getLogger("pymongo").setLevel(logging.WARNING)
+    # logging.getLogger("httpx").setLevel(logging.WARNING)
+    # logging.getLogger("httpcore").setLevel(logging.WARNING)
 
     log_file_path = None
 
@@ -339,8 +344,8 @@ def setup_logging(
     # 文件处理器
     if file:
         now = datetime.now()
-        date_dir = now.strftime("%Y-%m-%d")
-        log_path = Path(log_base_dir) / date_dir
+        # 按 年/月/日 分层存储，避免日期文件夹平铺
+        log_path = Path(log_base_dir) / now.strftime("%Y") / now.strftime("%m") / now.strftime("%d")
         log_path.mkdir(parents=True, exist_ok=True)
 
         time_filename = now.strftime("%H-%M-%S") + ".log"
