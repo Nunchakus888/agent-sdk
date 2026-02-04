@@ -8,27 +8,8 @@
     "tone": "Friendly and professional",
     "chatbot_id": "67adb3abaa26c063de0f4bd9"
   },
-  "flow_url": "http://flow-examples.test.svc.cluster.local:8080",
   "retrieve_knowledge_url": "http://121.43.165.245:18080/chatbot/ai-inner/retrieve-knowledge",
-  "flows": [
-    {
-      "name": "greet_customer",
-      "description": "Greet the customer",
-      "trigger_patterns": ["hello", "hi", "hey", "greetings"],
-      "endpoint": {
-        "url": "{flow_url}",
-        "method": "POST",
-        "headers": {
-          "Content-Type": "application/json"
-        },
-        "body": {
-          "chatbotId": "{chatbotId}",
-          "tenantId": "{tenantId}"
-        }
-      }
-    }
-  ],
-  "skills": [
+  "action_books": [
     {
       "condition": "1. Wants to schedule a demo 2. Requests detailed product/service information 3. Needs salesperson or account manager 4. Reveals purchase intention 5. Compares products between brands 6. Wants to sign up or get free trial 7. Asks for E-books or whitepapers 8. Inquires about pricing 9. Provide any contact information",
       "action": "Persuade the customer to provide required information, then save the customer's information using the save_customer_information tool",
@@ -44,30 +25,357 @@
       ]
     }
   ],
-  "system_tools": [
+  "system_actions": [
+    "save_customer_information",
+    "handoff_to",
+    "close_conversation"
+  ],
+  "agent_actions": [
+    "read_customer_information",
+    "flow_executor",
+    "actionbook_executor"
+  ],
+  "flows": [
     {
-      "name": "retrieve_knowledge",
-      "description": "Retrieve relevant information from the knowledge base",
+      "flow_id": "gretting",
+      "description": "Greet the customer",
+      "trigger_patterns": ["hello", "hi", "hey", "greetings"],
+      "type": "keyword",
+      "match_type":"exact"
+    },
+    {
+      "flow_id": "product_recommendation",
+      "description": "Recommend products to the customer",
+      "trigger_patterns": ["recommend", "suggest", "product", "service"],
+      "type": "intent",
+      "match_type":"contains"
+    }
+  ],
+  "tools": [
+    {
+      "name": "woocommerce_order_query_by_customer_id",
+      "description": "Order query for WooCommerce orders by customer id",
       "parameters": {
         "type": "object",
-        "properties": {}
+        "properties": {
+          "customer_id": {
+            "type": "string",
+            "description": "ID of the customer"
+          }
+        },
+        "required": [
+          "customer_id"
+        ]
       },
       "endpoint": {
-        "url": "http://172.16.92.21:18080/chatbot/ai-inner/retrieve-knowledge",
+        "url": "https://wooycdev.lchnan.cn/wp-json/wc/v3/orders?customer={customer_id}&per_page=3",
         "method": "GET",
+        "headers": {
+          "Content-Type": "application/json",
+          "Authorization": "Basic Y2tfYWFmOTkzMjc1NDBjOWViMGI1NDdjMDhkZjcxOTUyMGQ1MGZhNTc5ZDpjc182YmQ0OWQ0YjBiMjQ2YTcwOGI5MDE0Y2E5Mzk0MjVhYWI4YjI5YTgw"
+        },
+        "body": "{}"
+      }
+    },
+    {
+      "name": "woocommerce_order_query_by_id",
+      "description": "Order query for WooCommerce orders by order ID",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "order id"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "endpoint": {
+        "url": "https://wooycdev.lchnan.cn/wp-json/wc/v3/orders/{id}",
+        "method": "GET",
+        "headers": {
+          "Authorization": "Basic Y2tfYWFmOTkzMjc1NDBjOWViMGI1NDdjMDhkZjcxOTUyMGQ1MGZhNTc5ZDpjc182YmQ0OWQ0YjBiMjQ2YTcwOGI5MDE0Y2E5Mzk0MjVhYWI4YjI5YTgw",
+          "Content-Type": "application/json"
+        }
+      }
+    },
+    {
+      "name": "woocommerce_customer_query",
+      "description": "Use customer's email address to query customer id",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "The email address of the customer"
+          }
+        },
+        "required": [
+          "email"
+        ]
+      },
+      "endpoint": {
+        "url": "https://wooycdev.lchnan.cn/wp-json/wc/v3/customers?email={email}",
+        "method": "GET",
+        "headers": {
+          "Content-Type": "application/json",
+          "Authorization": "Basic Y2tfYWFmOTkzMjc1NDBjOWViMGI1NDdjMDhkZjcxOTUyMGQ1MGZhNTc5ZDpjc182YmQ0OWQ0YjBiMjQ2YTcwOGI5MDE0Y2E5Mzk0MjVhYWI4YjI5YTgw"
+        },
+        "body": "{}"
+      }
+    },
+    {
+      "name": "YT_logistics_tracking",
+      "description": "Tracking for YT Logistics packages",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tracking_id": {
+            "type": "string",
+            "description": "YT tracking ID"
+          }
+        },
+        "required": [
+          "tracking_id"
+        ]
+      },
+      "endpoint": {
+        "url": "https://www.yto.net.cn/ec/order/gwWaybillInfoList",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "[\n  \"{tracking_id}\"\n]"
+      }
+    },
+    {
+      "name": "save_customer_information",
+      "description": "Save customer information as fields are provided",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "description": "The email of the customer",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email"
+        ]
+      },
+      "endpoint": {
+        "url": "https://jsonplaceholder.typicode.com/posts",
+        "method": "POST",
         "headers": {
           "Content-Type": "application/json"
         },
         "body": {
-          "chatbotId": "{chatbotId}",
-          "tenantId": "{tenantId}",
-          "keywords": "{keywords}"
+          "phoneNumber": "#phoneNumber#",
+          "tenantId": "634cee9dca439909c72cdfd9",
+          "email": "{email}"
         }
       }
     },
     {
       "name": "save_customer_information",
+      "description": "Save customer information as fields are provided",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "web": {
+            "description": "the official company website of the client",
+            "type": "string"
+          },
+          "company_name": {
+            "description": "The client's company name or abbreviation",
+            "type": "string"
+          },
+          "phoneNumber": {
+            "description": "The client's phone number",
+            "type": "number"
+          }
+        },
+        "required": [
+          "company_name",
+          "web",
+          "phoneNumber"
+        ]
+      },
+      "endpoint": {
+        "url": "https://jsonplaceholder.typicode.com/posts",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "phoneNumber": "{phoneNumber}",
+          "customAttrs": [
+            {
+              "value": "{company_name}",
+              "key": "company_name"
+            },
+            {
+              "value": "{web}",
+              "key": "web"
+            },
+            {
+              "value": "{phoneNumber}",
+              "key": "phoneNumber"
+            }
+          ],
+          "tenantId": "691420135f0a4e0c1983f7a0"
+        }
+      }
+    },
+    {
+      "name": "get_weather_by_geo",
+      "description": "get weather information by geo (lat and lon)",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "lat": {
+            "type": "number",
+            "description": "the lat number of a geo "
+          },
+          "lon": {
+            "type": "number",
+            "description": "the lon number of a geo"
+          }
+        },
+        "required": [
+          "lat",
+          "lon"
+        ]
+      },
+      "endpoint": {
+        "url": "https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid=0142cc1a5c295ac07dac4c8c2c7ad4a3",
+        "method": "GET",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{}"
+      }
+    },
+    {
+      "name": "city_geo_info",
+      "description": "get the geography information of a city by city name.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string",
+            "description": "city name in english"
+          }
+        },
+        "required": [
+          "city"
+        ]
+      },
+      "endpoint": {
+        "url": "https://api.geoapify.com/v1/geocode/search?text={city}&apiKey=b143f80f38964538bdac7341ac627cd5",
+        "method": "GET",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{}"
+      }
+    },
+    {
+      "name": "actionbook_executor",
+      "description": "Execute the action book",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actionBookId": {
+            "type": "string",
+            "description": "The ID of the action book"
+          },
+          "chatbotId": {
+            "type": "string",
+            "description": "The ID of the chatbot"
+          },
+          "tenantId": {
+            "type": "string",
+            "description": "The ID of the tenant"
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "The ID of the session"
+          },
+          "message": {
+            "type": "string",
+            "description": "The message to execute the action book"
+          }
+        },
+        "required": ["actionBookId", "chatbotId", "tenantId", "sessionId", "message"]
+      },
+      "endpoint": {
+        "url": "http://172.16.92.21:18080/actionBookService/execute",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "actionBookId": "{actionBookId}",
+          "chatbotId": "{chatbotId}",
+          "tenantId": "{tenantId}",
+          "sessionId": "{sessionId}",
+          "message": "{message}"
+        }
+      }
+    },
+    {
+      "name": "flow_executor",
+      "description": "Execute the flow",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "flowId": {
+            "type": "string",
+            "description": "The ID of the flow"
+          },
+          "parameters": {
+            "type": "object",
+            "description": "The parameters of the flow"
+          }
+        },
+        "required": ["flowId", "parameters"]
+      },
+      "endpoint": {
+        "url": "{flow_url}",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "flowId": "{flowId}",
+          "parameters": "{parameters}"
+        }
+      }
+    },
+    {
+      "name": "read_customer_information",
+      "description": "Read the customer's information from the database",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "customerId": {
+            "type": "string",
+            "description": "The ID of the customer"
+          }
+        }
+      },
+      "endpoint": {
+        "url": "http://172.16.92.21:18080/contactsService/get",
+        "method": "GET"
+      }
+    },
+    {
+      "name": "save_customer_information",
       "description": "Save the customer's information when they provide one or more fields",
+      "trigger": "",
       "parameters": {
         "type": "object",
         "properties": {
@@ -111,6 +419,7 @@
     {
       "name": "handoff_to",
       "description": "Transfer the current conversation to a human agent or team for further assistance. This tool allows you to hand off the conversation when the customer requests human support or when the conversation requires human intervention. You can specify the assignee type (owner, agent, unassigned, team, or lastAssignee) and optionally provide an assignee ID.",
+      "trigger": "",
       "parameters": {
         "type": "object",
         "properties": {
@@ -143,6 +452,7 @@
     {
       "name": "close_conversation",
       "description": "Close the current conversation by ending the dialog",
+      "trigger": "",
       "parameters": {
         "type": "object",
         "properties": {}

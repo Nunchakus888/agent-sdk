@@ -23,7 +23,8 @@ from bu_agent_sdk.agent.compaction import CompactionConfig
 from bu_agent_sdk.agent.service import Agent, TaskComplete
 from bu_agent_sdk.llm.base import BaseChatModel, LLMProvider
 from bu_agent_sdk.llm.messages import AssistantMessage, UserMessage
-from bu_agent_sdk.tools.actions import WorkflowConfigSchema
+from bu_agent_sdk.prompts.builder import SystemPromptBuilder
+from bu_agent_sdk.schemas import WorkflowConfigSchema
 from bu_agent_sdk.tools.config_loader import HttpTool, ToolConfig
 from bu_agent_sdk.tools.decorator import Tool
 from bu_agent_sdk.tokens import UsageSummary
@@ -186,86 +187,24 @@ class WorkflowAgentV2:
                 tools.append(_create_flow_tool(flow_id, description, None))
 
         # 4. System Actions - Convert to Tool
-        if self.config.system_actions:
-            for action in self.config.system_actions:
-                if isinstance(action, str):
-                    action_id = action
-                    action_name = action
-                    silent = False
-                else:
-                    action_id = action.action_id
-                    action_name = action.name
-                    silent = action.silent
-                tools.append(_create_system_tool(action_id, action_name, silent))
+        # if self.config.system_actions:
+        #     for action in self.config.system_actions:
+        #         if isinstance(action, str):
+        #             action_id = action
+        #             action_name = action
+        #             silent = False
+        #         else:
+        #             action_id = action.action_id
+        #             action_name = action.name
+        #             silent = action.silent
+        #         tools.append(_create_system_tool(action_id, action_name, silent))
 
         return tools
 
     def _build_system_prompt(self) -> str:
-        """Build System Prompt, integrate SOP and configuration."""
-        parts = []
-
-        # 1. Basic settings
-        basic = self.config.basic_settings
-        if basic:
-            parts.append(f"""## Agent Profile
-- Name: {basic.get('name', 'Assistant')}
-- Description: {basic.get('description', '')}
-- Language: {basic.get('language', 'English')}
-- Tone: {basic.get('tone', 'professional')}""")
-
-        # 2. SOP Instructions
-        if self.config.instructions:
-            parts.append(f"""## SOP Instructions
-{self.config.instructions}""")
-
-        # 3. Constraints
-        if self.config.constraints:
-            parts.append(f"""## Constraints
-{self.config.constraints}""")
-
-        # 4. Available Actions description
-        actions_desc = self._format_available_actions()
-        if actions_desc:
-            parts.append(f"""## Available Actions
-{actions_desc}""")
-
-        # 5. Response Guidelines
-        parts.append("""## Response Guidelines
-- Follow the SOP step by step
-- Use tools when needed to complete tasks
-- Respond directly when you have enough information
-- Be helpful, concise, and professional
-- If uncertain, ask for clarification""")
-
-        return "\n\n".join(parts)
-
-    def _format_available_actions(self) -> str:
-        """Format available actions description."""
-        sections = []
-
-        if self.config.tools:
-            tool_names = [t.get("name", "unknown") for t in self.config.tools]
-            sections.append(f"- Tools: {', '.join(tool_names)}")
-
-        if self.config.skills:
-            skill_ids = [
-                s.get("skill_id", "unknown") if isinstance(s, dict) else s.skill_id
-                for s in self.config.skills
-            ]
-            sections.append(f"- Skills: {', '.join(skill_ids)}")
-
-        if self.config.flows:
-            flow_ids = [f.flow_id or f.name or "unknown" for f in self.config.flows]
-            sections.append(f"- Flows: {', '.join(flow_ids)}")
-
-        if self.config.system_actions:
-            action_ids = [
-                a if isinstance(a, str) else a.action_id
-                for a in self.config.system_actions
-            ]
-            sections.append(f"- System Actions: {', '.join(action_ids)}")
-
-        return "\n".join(sections) if sections else "No actions available"
+        """Build System Prompt using unified builder."""
+        builder = SystemPromptBuilder(config=self.config)
+        return builder.build()
 
     async def query(
         self,

@@ -1,0 +1,677 @@
+{
+  "flows": [
+    {
+      "description": "20260204113900FLOW",
+      "type": "intent",
+      "flow_id": "6982bf54b7fb8c0ff4bf43c5",
+      "trigger_patterns": [
+        "Showing greetings including \"Hello,\" \"Good morning,\" \"Hi,\" \"Welcome,\"，other phrases or words used in a polite and friendly way to say hi.发多少,尺寸"
+      ],
+      "match_type": "contains"
+    }
+  ],
+  "tools": [
+    {
+      "name": "get_contact_info",
+      "description": "Get contact information by phone number, including nickname, email, tags, and custom attributes",
+      "endpoint": {
+        "url": "http://yunpian-attila-security:8080/contactsService/getByPhoneNumber?phoneNumber=#phoneNumber#&tenantId=6336b6724011d05a0edbbe1a",
+        "method": "GET",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {}
+      }
+    },
+    {
+      "name": "trigger_flow",
+      "description": "Trigger a predefined flow execution based on user intent",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "flow_id": {
+            "description": "The ID of the flow to trigger",
+            "type": "string"
+          }
+        },
+        "required": []
+      },
+      "endpoint": {
+        "url": "http://yunpian-attila-security:8080/chatbot/ai-inner/trigger-flow",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "chatbotId": "6982b54ab0156d11ca09e76a",
+          "conversationId": "#conversationId#",
+          "tenantId": "6336b6724011d05a0edbbe1a",
+          "flowId": "{flow_id}",
+          "customerPhoneNumber": "#phoneNumber#",
+          "businessPhoneNumber": "#businessPhoneNumber#"
+        }
+      }
+    },
+    {
+      "name": "hand_off",
+      "description": "Transfer the current conversation to a human agent or team",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "description": "The type of assignee (owner, agent, unassigned, team, lastAssignee)",
+            "type": "string"
+          },
+          "assignee_id": {
+            "description": "The ID of the assignee",
+            "type": "string"
+          }
+        },
+        "required": []
+      },
+      "endpoint": {
+        "url": "http://yunpian-attila-inbox:8080/inboxConversationService/handoff",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "type": "{type}",
+          "dialogId": "#dialogId#",
+          "assigneeId": "{assignee_id}"
+        }
+      }
+    },
+    {
+      "name": "close_conversation",
+      "description": "Close the current conversation by ending the dialog",
+      "endpoint": {
+        "url": "http://yunpian-attila-inbox:8080/inboxConversationService/close?dialogId=#dialogId#",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {}
+      }
+    },
+    {
+      "name": "add_contact_tags",
+      "description": "Add tags to a contact by phone number",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tag_name": {
+            "description": "The name of the tag to add to the contact",
+            "type": "string"
+          }
+        },
+        "required": []
+      },
+      "endpoint": {
+        "url": "http://yunpian-attila-security:8080/contactsService/tagByPhoneNumber",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "phoneNumber": "#phoneNumber#",
+          "tenantId": "6336b6724011d05a0edbbe1a",
+          "tagName": "{tag_name}"
+        }
+      }
+    },
+    {
+      "name": "upsert_contact_attributes",
+      "description": "Update or create the contact's attributes when they provide information during the conversation",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "last_seen": {
+            "description": "Last seen",
+            "type": "string"
+          },
+          "source_url": {
+            "description": "Source URL",
+            "type": "string"
+          },
+          "shopify_sms_marketing_consent_from": {
+            "description": "Shopify Mapping Field",
+            "type": "string"
+          },
+          "is_shopify": {
+            "description": "Shopify Mapping Field",
+            "type": "string"
+          },
+          "611text": {
+            "description": "611text",
+            "type": "string"
+          },
+          "611boolean": {
+            "description": "611Boolean",
+            "type": "boolean"
+          },
+          "shopify_email_marketing_consent_opt_in_level": {
+            "description": "Shopify Mapping Field",
+            "type": "string"
+          },
+          "shopify_last_order_id_2": {
+            "description": "SHOPIFY",
+            "type": "string"
+          },
+          "shopify_last_order_id_1": {
+            "description": "SHOPIFY",
+            "type": "string"
+          },
+          "create_time": {
+            "description": "First seen",
+            "type": "string"
+          },
+          "test": {
+            "description": "TikTok",
+            "type": "string"
+          },
+          "shopify_last_order_time_3": {
+            "description": "SHOPIFY",
+            "type": "string"
+          },
+          "source_type": {
+            "description": "Source",
+            "type": "string"
+          },
+          "shopify_last_order_time_1": {
+            "description": "SHOPIFY",
+            "type": "string"
+          },
+          "shopify_last_order_time_2": {
+            "description": "SHOPIFY",
+            "type": "string"
+          },
+          "shopify_total_spent": {
+            "description": "Shopify Mapping Field",
+            "type": "number"
+          },
+          "tags": {
+            "description": "Tag",
+            "type": "array"
+          },
+          "shopify_email": {
+            "description": "SHOPIFY",
+            "type": "string"
+          },
+          "611longtext": {
+            "description": "gogogo",
+            "type": "string"
+          },
+          "611time": {
+            "description": "611Time",
+            "type": "string"
+          },
+          "shopify_note": {
+            "description": "Shopify Mapping Field",
+            "type": "string"
+          },
+          "shopify_purchased_product_ids": {
+            "description": "Shopify Mapping Field",
+            "type": "array"
+          },
+          "nick_name": {
+            "description": "The name of the customer",
+            "type": "string"
+          },
+          "phone_number": {
+            "description": "Phone number",
+            "type": "string"
+          },
+          "shopify_orders_count": {
+            "description": "Shopify Mapping Field",
+            "type": "number"
+          },
+          "shopify_customer_id_3": {
+            "description": "SHOPIFY",
+            "type": "string"
+          },
+          "shopify_customer_id_2": {
+            "description": "SHOPIFY",
+            "type": "string"
+          },
+          "shopify_last_order_id_3": {
+            "description": "SHOPIFY",
+            "type": "string"
+          },
+          "shopify_customer_id_1": {
+            "description": "SHOPIFY",
+            "type": "string"
+          },
+          "shopify_last_name": {
+            "description": "Shopify Mapping Field",
+            "type": "string"
+          },
+          "shopify_sms_marketing_consent_state": {
+            "description": "Shopify Mapping Field",
+            "type": "string"
+          },
+          "shopify_state": {
+            "description": "Shopify Mapping Field",
+            "type": "string"
+          },
+          "blocked": {
+            "description": "Blocked",
+            "type": "boolean"
+          },
+          "array": {
+            "description": "desc",
+            "type": "array"
+          },
+          "country_name": {
+            "description": "Country",
+            "type": "string"
+          },
+          "is_shopify_2": {
+            "description": "SHOPIFY",
+            "type": "boolean"
+          },
+          "is_shopify_3": {
+            "description": "SHOPIFY",
+            "type": "boolean"
+          },
+          "is_shopify_4": {
+            "description": "SHOPIFY",
+            "type": "boolean"
+          },
+          "email": {
+            "description": "The email of the customer",
+            "type": "string"
+          },
+          "is_shopify_1": {
+            "description": "SHOPIFY",
+            "type": "boolean"
+          },
+          "owner_email": {
+            "description": "Owner",
+            "type": "string"
+          },
+          "shopify_currency": {
+            "description": "Shopify Mapping Field",
+            "type": "string"
+          },
+          "shopify_verified_email": {
+            "description": "Shopify Mapping Field",
+            "type": "boolean"
+          },
+          "shopify_email_marketing_consent_state": {
+            "description": "Shopify Mapping Field",
+            "type": "string"
+          },
+          "shopify_first_name": {
+            "description": "Shopify Mapping Field",
+            "type": "string"
+          },
+          "611number": {
+            "description": "611Number",
+            "type": "number"
+          },
+          "shopify_created_at": {
+            "description": "Shopify Mapping Field",
+            "type": "number"
+          },
+          "last_connected_number": {
+            "description": "Last connected number",
+            "type": "string"
+          },
+          "shopify_tags": {
+            "description": "SHOPIFY",
+            "type": "array"
+          },
+          "shopify_sms_marketing_consent_opt_in_level": {
+            "description": "Shopify Mapping Field",
+            "type": "string"
+          },
+          "shopify_created_at_2": {
+            "description": "SHOPIFY",
+            "type": "string"
+          },
+          "611array": {
+            "description": "611Array",
+            "type": "array"
+          },
+          "shopify_created_at_3": {
+            "description": "SHOPIFY",
+            "type": "string"
+          },
+          "source_id": {
+            "description": "Source ID",
+            "type": "string"
+          },
+          "shopify_created_at_1": {
+            "description": "SHOPIFY",
+            "type": "string"
+          },
+          "shopify_last_order_id": {
+            "description": "Shopify Mapping Field",
+            "type": "number"
+          },
+          "shopify_last_order_time": {
+            "description": "Shopify Mapping Field",
+            "type": "number"
+          },
+          "shopify_updated_at": {
+            "description": "SHOPIFY",
+            "type": "string"
+          },
+          "shopify_customer_id": {
+            "description": "Shopify Mapping Field",
+            "type": "number"
+          }
+        },
+        "required": []
+      },
+      "endpoint": {
+        "url": "/contactsService/upsert",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "phoneNumber": "#phoneNumber#",
+          "nick_name": "{nick_name}",
+          "customAttrs": [
+            {
+              "value": "{blocked}",
+              "key": "blocked"
+            },
+            {
+              "value": "{country_name}",
+              "key": "country_name"
+            },
+            {
+              "value": "{create_time}",
+              "key": "create_time"
+            },
+            {
+              "value": "{last_connected_number}",
+              "key": "last_connected_number"
+            },
+            {
+              "value": "{last_seen}",
+              "key": "last_seen"
+            },
+            {
+              "value": "{owner_email}",
+              "key": "owner_email"
+            },
+            {
+              "value": "{phone_number}",
+              "key": "phone_number"
+            },
+            {
+              "value": "{source_type}",
+              "key": "source_type"
+            },
+            {
+              "value": "{source_id}",
+              "key": "source_id"
+            },
+            {
+              "value": "{source_url}",
+              "key": "source_url"
+            },
+            {
+              "value": "{tags}",
+              "key": "tags"
+            },
+            {
+              "value": "{blocked}",
+              "key": "blocked"
+            },
+            {
+              "value": "{country_name}",
+              "key": "country_name"
+            },
+            {
+              "value": "{create_time}",
+              "key": "create_time"
+            },
+            {
+              "value": "{last_connected_number}",
+              "key": "last_connected_number"
+            },
+            {
+              "value": "{last_seen}",
+              "key": "last_seen"
+            },
+            {
+              "value": "{owner_email}",
+              "key": "owner_email"
+            },
+            {
+              "value": "{phone_number}",
+              "key": "phone_number"
+            },
+            {
+              "value": "{source_type}",
+              "key": "source_type"
+            },
+            {
+              "value": "{source_id}",
+              "key": "source_id"
+            },
+            {
+              "value": "{source_url}",
+              "key": "source_url"
+            },
+            {
+              "value": "{tags}",
+              "key": "tags"
+            },
+            {
+              "value": "{611array}",
+              "key": "611array"
+            },
+            {
+              "value": "{611boolean}",
+              "key": "611boolean"
+            },
+            {
+              "value": "{611longtext}",
+              "key": "611longtext"
+            },
+            {
+              "value": "{611number}",
+              "key": "611number"
+            },
+            {
+              "value": "{611time}",
+              "key": "611time"
+            },
+            {
+              "value": "{611text}",
+              "key": "611text"
+            },
+            {
+              "value": "{is_shopify}",
+              "key": "is_shopify"
+            },
+            {
+              "value": "{is_shopify_1}",
+              "key": "is_shopify_1"
+            },
+            {
+              "value": "{is_shopify_2}",
+              "key": "is_shopify_2"
+            },
+            {
+              "value": "{is_shopify_3}",
+              "key": "is_shopify_3"
+            },
+            {
+              "value": "{is_shopify_4}",
+              "key": "is_shopify_4"
+            },
+            {
+              "value": "{shopify_created_at}",
+              "key": "shopify_created_at"
+            },
+            {
+              "value": "{shopify_created_at_1}",
+              "key": "shopify_created_at_1"
+            },
+            {
+              "value": "{shopify_created_at_2}",
+              "key": "shopify_created_at_2"
+            },
+            {
+              "value": "{shopify_created_at_3}",
+              "key": "shopify_created_at_3"
+            },
+            {
+              "value": "{shopify_currency}",
+              "key": "shopify_currency"
+            },
+            {
+              "value": "{shopify_customer_id}",
+              "key": "shopify_customer_id"
+            },
+            {
+              "value": "{shopify_customer_id_1}",
+              "key": "shopify_customer_id_1"
+            },
+            {
+              "value": "{shopify_customer_id_2}",
+              "key": "shopify_customer_id_2"
+            },
+            {
+              "value": "{shopify_customer_id_3}",
+              "key": "shopify_customer_id_3"
+            },
+            {
+              "value": "{shopify_email}",
+              "key": "shopify_email"
+            },
+            {
+              "value": "{shopify_email_marketing_consent_opt_in_level}",
+              "key": "shopify_email_marketing_consent_opt_in_level"
+            },
+            {
+              "value": "{shopify_email_marketing_consent_state}",
+              "key": "shopify_email_marketing_consent_state"
+            },
+            {
+              "value": "{shopify_first_name}",
+              "key": "shopify_first_name"
+            },
+            {
+              "value": "{shopify_last_name}",
+              "key": "shopify_last_name"
+            },
+            {
+              "value": "{shopify_last_order_id}",
+              "key": "shopify_last_order_id"
+            },
+            {
+              "value": "{shopify_last_order_id_1}",
+              "key": "shopify_last_order_id_1"
+            },
+            {
+              "value": "{shopify_last_order_id_2}",
+              "key": "shopify_last_order_id_2"
+            },
+            {
+              "value": "{shopify_last_order_id_3}",
+              "key": "shopify_last_order_id_3"
+            },
+            {
+              "value": "{shopify_last_order_time}",
+              "key": "shopify_last_order_time"
+            },
+            {
+              "value": "{shopify_last_order_time_1}",
+              "key": "shopify_last_order_time_1"
+            },
+            {
+              "value": "{shopify_last_order_time_2}",
+              "key": "shopify_last_order_time_2"
+            },
+            {
+              "value": "{shopify_last_order_time_3}",
+              "key": "shopify_last_order_time_3"
+            },
+            {
+              "value": "{shopify_note}",
+              "key": "shopify_note"
+            },
+            {
+              "value": "{shopify_orders_count}",
+              "key": "shopify_orders_count"
+            },
+            {
+              "value": "{shopify_purchased_product_ids}",
+              "key": "shopify_purchased_product_ids"
+            },
+            {
+              "value": "{shopify_sms_marketing_consent_from}",
+              "key": "shopify_sms_marketing_consent_from"
+            },
+            {
+              "value": "{shopify_sms_marketing_consent_opt_in_level}",
+              "key": "shopify_sms_marketing_consent_opt_in_level"
+            },
+            {
+              "value": "{shopify_sms_marketing_consent_state}",
+              "key": "shopify_sms_marketing_consent_state"
+            },
+            {
+              "value": "{shopify_state}",
+              "key": "shopify_state"
+            },
+            {
+              "value": "{shopify_tags}",
+              "key": "shopify_tags"
+            },
+            {
+              "value": "{shopify_total_spent}",
+              "key": "shopify_total_spent"
+            },
+            {
+              "value": "{shopify_updated_at}",
+              "key": "shopify_updated_at"
+            },
+            {
+              "value": "{shopify_verified_email}",
+              "key": "shopify_verified_email"
+            },
+            {
+              "value": "{array}",
+              "key": "array"
+            },
+            {
+              "value": "{test}",
+              "key": "test"
+            }
+          ],
+          "tenantId": "6336b6724011d05a0edbbe1a",
+          "email": "{email}"
+        }
+      }
+    }
+  ],
+  "basic_settings": {
+    "description": "渣渣冲刺冲刺大111",
+    "background": "AI二号品牌AI二号品牌",
+    "instruction": "WORK PROCEDURE\n1. Greet using their nickname and ask:\n\"Hi {{$contact.nickname}}! 👋 What can I do for you today?\"\n2. Ask, collect and save the following contact details: {{$contact.nickname}}.\n3. Ask about the customer's needs:\n- \"What are you looking for?\"\n- \"Do you have a budget in mind?\"\n- Based on their answers, briefly highlight one key feature or benefit of the product/service that addresses their stated need.\n4. If Contact shows interest in a product, ask \"Would you like to book a demo or talk to someone?\"\n  1. If yes, escalate to human agents.\n  2. If Contact is not ready, let them know you're here if they need help later.\n5. Wrap up by asking if there's anything else they need help with. If not, close the conversation.\n\nCONTEXT\n- You're speaking to someone exploring our products or services.\n- Your goal is to get the customer's information\n\nROLE & COMMUNICATION STYLE\n- You're a warm, helpful, and relaxed sales guide—never pushy.\n- Ask one question at a time. Keep replies short, clear, and encouraging.\n- Keep replies short and conversational, two sentences max.\n\nCHECK MISSING DATA\nOnly ask for contact information if the specified contact fields [e.g. Name and Email] are missing, null, or undefined.\n\nFOLLOW UP HANDLING\n- If there's no reply after 5 minutes, send: \"Hi, just checking if you're still there?\". And if still no reply after 5 minutes, send: \"I'll close the chat for now, but feel free to message anytime!\" and close the conversation.\n\nFALL BACK HANDLING\n- If you don't understand the user's intent, first try to confirm it in a friendly manner. If you still cannot understand, escalate to human agents.\n\nBOUNDARIES\n- Only use verified information from the brand info or knowledge base.\n- Never invent facts, processes, prices, or policies that are not covered in the instructions here.\n- Do not share personal, financial, or sensitive information unless explicitly instructed to.\n- Stay within your role; do not act or advise beyond it.\n- Never share assumptions, opinions, or promises.\n",
+    "language": "English",
+    "tone": "Professional",
+    "chatbot_id": "6982b54ab0156d11ca09e76a"
+  },
+  "retrieve_knowledge_url": "http://121.43.165.245:18080/chatbot/ai-inner/retrieve-knowledge",
+  "action_books": [],
+  "system_actions": [
+    "hand_off",
+    "close_conversation",
+    "add_contact_tags",
+    "upsert_contact_attributes"
+  ],
+  "agent_actions": [
+    "get_contact_info",
+    "trigger_flow"
+  ]
+}

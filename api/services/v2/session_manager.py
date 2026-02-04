@@ -18,7 +18,7 @@ import logging
 from typing import Optional, Callable, Awaitable, TYPE_CHECKING
 
 from bu_agent_sdk.agent.workflow_agent_v2 import WorkflowAgentV2
-from bu_agent_sdk.tools.actions import WorkflowConfigSchema
+from bu_agent_sdk.schemas import WorkflowConfigSchema
 from bu_agent_sdk.llm.messages import UserMessage, AssistantMessage
 
 from api.services.v2.session_context import SessionContext, SessionTimer
@@ -263,7 +263,6 @@ class SessionManager:
     ) -> WorkflowConfigSchema:
         """从 HTTP 加载配置并存储到 DB"""
         from config.http_config import HttpConfigLoader, AgentConfigRequest
-        from api.services.v2.config_loader import StoredConfig
 
         if self._http_loader is None:
             self._http_loader = HttpConfigLoader(logger)
@@ -322,16 +321,6 @@ class SessionManager:
         """解析配置"""
         import os
 
-        # KB 配置
-        kb_config = raw_config.get("kb_config", {})
-        if not kb_config and raw_config.get("retrieve_knowledge_url"):
-            kb_config = {
-                "enabled": True,
-                "retrieve_url": raw_config["retrieve_knowledge_url"],
-                "chatbot_id": raw_config.get("basic_settings", {}).get("chatbot_id", ""),
-                "auto_retrieve": True,
-            }
-
         # 环境变量覆盖
         max_iterations = int(
             os.getenv("MAX_ITERATIONS", raw_config.get("max_iterations", 5))
@@ -345,7 +334,7 @@ class SessionManager:
 
         # 合并配置
         final_config = {
-            "kb_config": kb_config,
+            "retrieve_knowledge_url": raw_config.get("retrieve_knowledge_url"),
             "max_iterations": max_iterations,
             "iteration_strategy": iteration_strategy,
             **llm_parsed,
@@ -355,30 +344,42 @@ class SessionManager:
 
         logger.info(
             f"Config parsed: hash={config_hash[:12]}, "
-            f"kb={bool(kb_config)}, llm={self._enable_llm_parsing}"
+            f"llm={self._enable_llm_parsing}"
         )
 
         return WorkflowConfigSchema(**final_config)
 
     async def _llm_enhance(self, raw_config: dict) -> dict:
-        """LLM 增强解析"""
+        """
+        LLM 增强配置
+
+        增强字段：
+        - instructions: 从 basic_settings 生成/增强
+        - need_greeting: 推断或增强
+        - timers: 从 instruction 文本推断
+        - constraints: 安全边界
+
+        不处理（其他地方处理）：
+        - tools: 固定配置
+        - max_iterations: 环境变量
+        """
         if not self._enable_llm_parsing:
             return raw_config
 
         try:
-            from bu_agent_sdk.llm.messages import UserMessage
-            from api.services.v2.config_loader import ConfigLoader
+            from api.services.v2.config_enhancer import ConfigEnhancer
 
             llm = self._get_llm()
-            # 复用 ConfigLoader 的 prompt 构建逻辑
-            loader = ConfigLoader.__new__(ConfigLoader)
-            prompt = loader._build_prompt(raw_config)
+            enhancer = ConfigEnhancer(llm=llm)
 
-            logger.info("Calling LLM for config enhancement...")
-            response = await llm.ainvoke(messages=[UserMessage(content=prompt)])
-            response_text = response.content or ""
+            logger.info("Starting LLM config enhancement...")
+            enhanced = await enhancer.enhance(raw_config)
 
-            return loader._parse_llm_response(response_text, raw_config)
+            # 合并：增强字段覆盖原始配置
+            result = {**raw_config, **enhanced}
+
+            logger.info("LLM config enhancement completed")
+            return result
 
         except Exception as e:
             logger.error(f"LLM enhancement failed: {e}, using original config")

@@ -155,7 +155,7 @@ class HttpConfigLoader:
             ValueError: 响应数据格式错误
         """
         
-        config_path = "docs/configs/sop.json"
+        config_path = "docs/configs/sopv3.json"
         
         with open(config_path, "r", encoding="utf-8") as f:
             return json.load(f)

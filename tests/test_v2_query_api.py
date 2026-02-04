@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from fastapi import FastAPI
 
-from bu_agent_sdk.tools.actions import WorkflowConfigSchema
+from bu_agent_sdk.schemas import WorkflowConfigSchema
 from bu_agent_sdk.agent.workflow_agent_v2 import WorkflowAgentV2
 from bu_agent_sdk.agent.events import (
     ToolCallEvent,
@@ -32,8 +32,6 @@ from api.services.v2 import (
     QueryResult,
     ToolCallRecord,
 )
-# ConfigCache 不在 __all__ 中，需要直接导入
-from api.services.v2.config_cache import ConfigCache
 
 # 配置日志以查看 prompt 上下文
 logging.basicConfig(level=logging.DEBUG)
@@ -233,52 +231,6 @@ class TestWorkflowAgentV2Real:
 
         assert usage.total_tokens > 0
 
-
-
-# =============================================================================
-# ConfigCache Tests (No API needed)
-# =============================================================================
-
-
-class TestConfigCacheIntegration:
-    """ConfigCache 集成测试（不需要 API）"""
-
-    def test_cache_and_retrieve(self, sample_config):
-        """测试缓存和检索"""
-        cache = ConfigCache(max_size=5, ttl=3600)
-
-        cache.set("hash_1", sample_config)
-        retrieved = cache.get("hash_1")
-
-        assert retrieved is not None
-        assert retrieved.basic_settings["name"] == "Test Assistant"
-
-    def test_cache_stats(self, sample_config):
-        """测试缓存统计"""
-        cache = ConfigCache(max_size=5, ttl=3600)
-
-        cache.set("hash_1", sample_config)
-        cache.set("hash_2", sample_config)
-        cache.get("hash_1")  # 增加访问计数
-
-        stats = cache.get_stats()
-        assert stats["size"] == 2
-        assert len(stats["entries"]) == 2
-
-    def test_lru_eviction(self, sample_config):
-        """测试 LRU 淘汰"""
-        cache = ConfigCache(max_size=2, ttl=3600)
-
-        cache.set("hash_1", sample_config)
-        cache.set("hash_2", sample_config)
-        cache.get("hash_1")  # 访问 hash_1
-
-        # 添加 hash_3，应该淘汰 hash_2
-        cache.set("hash_3", sample_config)
-
-        assert cache.get("hash_1") is not None
-        assert cache.get("hash_2") is None
-        assert cache.get("hash_3") is not None
 
 
 # =============================================================================

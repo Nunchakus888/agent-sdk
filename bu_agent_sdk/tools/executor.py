@@ -13,7 +13,7 @@ from typing import Any
 
 import httpx
 
-from bu_agent_sdk.tools.actions import WorkflowConfigSchema
+from bu_agent_sdk.schemas import WorkflowConfigSchema
 
 logger = logging.getLogger(__name__)
 

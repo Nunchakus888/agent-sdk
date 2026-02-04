@@ -20,6 +20,7 @@ from datetime import datetime
 from typing import Optional
 
 from api.utils.datetime import utc_now, ensure_utc
+from bu_agent_sdk.schemas import WorkflowConfigSchema
 
 
 # =============================================================================
@@ -33,12 +34,13 @@ class ConfigDocumentV2:
     配置文档模型 (V2)
 
     _id = chatbot_id（全局唯一），config_hash 用于缓存失效检测
+    parsed_config 存储序列化的 WorkflowConfigSchema
     """
     chatbot_id: str                          # _id
     tenant_id: str
     config_hash: str                         # 缓存失效检测
     raw_config: dict
-    parsed_config: dict
+    parsed_config: dict                      # WorkflowConfigSchema.model_dump()
     version: Optional[str] = None
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
@@ -69,6 +71,29 @@ class ConfigDocumentV2:
             created_at=ensure_utc(data.get("created_at")) or utc_now(),
             updated_at=ensure_utc(data.get("updated_at")) or utc_now(),
             access_count=data.get("access_count", 0),
+        )
+
+    def to_workflow_config(self) -> "WorkflowConfigSchema":
+        """反序列化为 WorkflowConfigSchema"""
+        from bu_agent_sdk.schemas import WorkflowConfigSchema
+        return WorkflowConfigSchema(**self.parsed_config)
+
+    @classmethod
+    def from_workflow_config(
+        cls,
+        chatbot_id: str,
+        tenant_id: str,
+        config_hash: str,
+        raw_config: dict,
+        config: "WorkflowConfigSchema",
+    ) -> "ConfigDocumentV2":
+        """从 WorkflowConfigSchema 创建"""
+        return cls(
+            chatbot_id=chatbot_id,
+            tenant_id=tenant_id,
+            config_hash=config_hash,
+            raw_config=raw_config,
+            parsed_config=config.model_dump(),
         )
 
 
