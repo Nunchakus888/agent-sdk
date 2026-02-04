@@ -17,19 +17,36 @@ class ActionType(str, Enum):
     GENERATE_RESPONSE = "generate_response"  # Response to user
 
 
+class FlowType(str, Enum):
+    """Flow type for matching strategy."""
+    KEYWORD = "keyword"  # Code-based keyword matching (fast, deterministic)
+    INTENT = "intent"    # LLM semantic matching (flexible, context-aware)
+
+
+class MatchType(str, Enum):
+    """Match type for keyword flows."""
+    EXACT = "exact"        # Exact match
+    CONTAINS = "contains"  # Contains match
+    REGEX = "regex"        # Regex match
+
+
 class FlowDefinition(BaseModel):
     """Flow definition - direct API call, black box service."""
     name: str | None = Field(default=None, description="Flow name")
     flow_id: str | None = Field(default=None, description="Flow identifier (alternative to name)")
     description: str | None = Field(default=None, description="Flow description")
 
+    type: FlowType = Field(
+        default=FlowType.INTENT,
+        description="Flow type: keyword (code matching) or intent (LLM semantic matching)"
+    )
     trigger_patterns: list[str] = Field(
         default_factory=list,
-        description="Regex patterns for fast matching"
+        description="Patterns for keyword matching (used when type=keyword)"
     )
-    match_type: str | None = Field(
-        default=None,
-        description="Match type: exact | contains | regex"
+    match_type: MatchType = Field(
+        default=MatchType.CONTAINS,
+        description="Match type for keyword flows: exact | contains | regex"
     )
 
     endpoint: dict | None = Field(
@@ -98,6 +115,11 @@ class WorkflowConfigSchema(BaseModel):
         description="Skills list - structure: {condition, action, tools}"
     )
 
+    action_books: list[dict] = Field(
+        default_factory=list,
+        description="Action book list - structure: {condition, action, tools}"
+    )
+
     tools: list[dict] = Field(
         default_factory=list,
         description="Tool config list"
@@ -142,6 +164,8 @@ class WorkflowConfigSchema(BaseModel):
 
 __all__ = [
     "ActionType",
+    "FlowType",
+    "MatchType",
     "FlowDefinition",
     "TimerConfig",
     "WorkflowConfigSchema",

@@ -3,23 +3,23 @@ WorkflowAgent V2 - based on bu_agent_sdk.Agent's unified LLM interaction archite
 
 Core design:
 1. Use Agent as internal engine, unified LLM context management
-2. Convert all actions (skills, flows, tools, system) to Tool instances
+2. Convert all actions (skills, tools, system) to Tool instances
 3. Reuse Agent's compaction, token tracking, retry capabilities
 4. SOP as system prompt injected
+5. Flow matching: keyword (code-based) + intent (LLM via trigger_flow tool)
 
-Advantages:
-- Unified context: LLM always sees the complete execution history
-- Efficient reuse: compaction, token tracking, retry capabilities ready-to-use
-- Simple architecture: single Agent loop, cleaner code
-- Best practices: follow bu_agent_sdk's design patterns
+Flow execution:
+- Keyword flows: matched by code, executed via trigger_flow tool directly
+- Intent flows: LLM calls trigger_flow tool with flow_id
+- Unified execution through trigger_flow tool defined in config
 """
 
-import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any
 
 from bu_agent_sdk.agent.compaction import CompactionConfig
+from bu_agent_sdk.agent.flow_matcher import FlowMatcher, FlowMatchResult
 from bu_agent_sdk.agent.service import Agent, TaskComplete
 from bu_agent_sdk.llm.base import BaseChatModel, LLMProvider
 from bu_agent_sdk.llm.messages import AssistantMessage, UserMessage
@@ -30,6 +30,8 @@ from bu_agent_sdk.tools.decorator import Tool
 from bu_agent_sdk.tokens import UsageSummary
 
 logger = logging.getLogger("agent_sdk.workflow_agent")
+
+TRIGGER_FLOW_TOOL_NAME = "trigger_flow"
 
 
 def _create_http_tool_wrapper(http_tool: HttpTool) -> Tool:
@@ -44,7 +46,7 @@ def _create_http_tool_wrapper(http_tool: HttpTool) -> Tool:
         func=execute_http,
         description=defn.description,
         name=defn.name,
-        _definition=defn,  # Use HttpTool's definition directly
+        _definition=defn,
     )
 
 
@@ -63,65 +65,15 @@ def _create_skill_tool(skill_id: str, description: str, executor_fn) -> Tool:
     )
 
 
-def _create_flow_tool(flow_id: str, description: str, executor_fn) -> Tool:
-    """Create Flow Tool."""
-    async def execute_flow() -> str:
-        if executor_fn:
-            result = await executor_fn(flow_id=flow_id, user_message="", parameters={}, session=None)
-            return str(result)
-        return f"Flow {flow_id} executed"
-
-    return Tool(
-        func=execute_flow,
-        description=description or f"Execute flow: {flow_id}",
-        name=f"flow__{flow_id}",
-    )
-
-
-def _create_system_tool(action_id: str, action_name: str, silent: bool = False) -> Tool:
-    """Create System Action Tool."""
-    async def execute_system(reason: str = "") -> str:
-        # Special handling: handoff, transfer, etc. to terminate dialog
-        if action_id in ("handoff", "transfer"):
-            raise TaskComplete(f"Transferred to human agent. Reason: {reason}")
-        if silent:
-            raise TaskComplete(f"System action {action_id} completed silently.")
-        return f"System action {action_id} executed. Reason: {reason}"
-
-    return Tool(
-        func=execute_system,
-        description=f"System action: {action_name}",
-        name=f"system__{action_id}",
-    )
-
-
 @dataclass
 class WorkflowAgentV2:
     """
     Workflow Agent based on bu_agent_sdk.Agent.
 
-    Use unified LLM context management, all actions as tools injected into Agent.
-
-    Usage:
-        ```python
-        agent = WorkflowAgentV2(config=config, llm=llm)
-
-        # Single query
-        response = await agent.query(
-            message="Help me",
-            session_id="sess_123",
-        )
-
-        # Multi-turn conversation (context automatically maintained)
-        response2 = await agent.query(
-            message="Tell me more",
-            session_id="sess_123",
-        )
-
-        # Get token usage statistics
-        usage = await agent.get_usage()
-        print(f"Total tokens: {usage.total_tokens}")
-        ```
+    Flow execution is unified through trigger_flow tool:
+    - Keyword match: code matches, then calls trigger_flow directly
+    - Intent match: LLM calls trigger_flow with flow_id
+    - Both use the same trigger_flow tool defined in config
     """
 
     config: WorkflowConfigSchema
@@ -134,70 +86,50 @@ class WorkflowAgentV2:
     _agent: Agent = field(default=None, repr=False)
     _workflow_tools: list[Tool] = field(default_factory=list, repr=False)
     _system_prompt: str = field(default="", repr=False)
+    _flow_matcher: FlowMatcher = field(default=None, repr=False)
 
     def __post_init__(self):
-        # LLM parsing
         if isinstance(self.llm, LLMProvider):
             self._llm = self.llm.get_response_llm()
         else:
             self._llm = self.llm
 
-        # Build tools
+        self._flow_matcher = FlowMatcher(flows=self.config.flows)
         self._workflow_tools = self._build_workflow_tools()
-
-        # Build system prompt
         self._system_prompt = self._build_system_prompt()
 
-        # Create internal Agent
         self._agent = Agent(
             llm=self._llm,
             tools=self._workflow_tools,
             system_prompt=self._system_prompt,
-            max_iterations=self.config.max_iterations * 2,  # Leave some room
+            max_iterations=self.config.max_iterations * 2,
             tool_choice="auto",
-            compaction=self.compaction or CompactionConfig(
-                threshold_ratio=0.75,  # 75% of context window
-            ),
+            compaction=self.compaction or CompactionConfig(threshold_ratio=0.75),
             include_cost=self.include_cost,
-            require_done_tool=False,  # LLM can directly respond
+            require_done_tool=False,
         )
 
     def _build_workflow_tools(self) -> list[Tool]:
-        """Convert all workflow actions to Tool instances."""
+        """Build workflow tools from config."""
         tools: list[Tool] = []
 
-        # 1. HTTP Tools - Use HttpTool directly
+        # HTTP Tools (includes trigger_flow)
         if self.config.tools:
             for tool_config in self.config.tools:
                 http_tool = HttpTool(config=ToolConfig(**tool_config))
                 tools.append(_create_http_tool_wrapper(http_tool))
 
-        # 2. Skills - Convert to Tool
+        # Skills
         if self.config.skills:
             for skill in self.config.skills:
                 skill_id = skill.get("skill_id", "unknown") if isinstance(skill, dict) else skill.skill_id
                 description = skill.get("description", "") if isinstance(skill, dict) else skill.description
                 tools.append(_create_skill_tool(skill_id, description, None))
 
-        # 3. Flows - Convert to Tool
-        if self.config.flows:
-            for flow in self.config.flows:
-                flow_id = flow.flow_id or flow.name or "unknown"
-                description = flow.description or f"Execute flow {flow_id}"
-                tools.append(_create_flow_tool(flow_id, description, None))
-
-        # 4. System Actions - Convert to Tool
-        # if self.config.system_actions:
-        #     for action in self.config.system_actions:
-        #         if isinstance(action, str):
-        #             action_id = action
-        #             action_name = action
-        #             silent = False
-        #         else:
-        #             action_id = action.action_id
-        #             action_name = action.name
-        #             silent = action.silent
-        #         tools.append(_create_system_tool(action_id, action_name, silent))
+        # action_books
+        if self.config.action_books:
+            # action_books are converted to tools, just pick the condition to match the intent
+            pass
 
         return tools
 
@@ -214,14 +146,18 @@ class WorkflowAgentV2:
         """
         Process user message.
 
-        Args:
-            message: User message
-            context: Injected history messages (optional)
-
-        Returns:
-            Agent response
+        Flow:
+        1. Try keyword matching (fast, deterministic)
+        2. If matched, call trigger_flow tool directly
+        3. If not matched, enter Agent loop (LLM may call trigger_flow)
         """
-        # If there is injected context, load it into Agent
+        # Step 1: Keyword matching
+        if self._flow_matcher.has_keyword_flows:
+            match_result = self._flow_matcher.match_keyword(message)
+            if match_result.matched:
+                return await self._execute_keyword_flow(match_result)
+
+        # Step 2: Load context if provided
         if context:
             messages = []
             for msg in context:
@@ -231,51 +167,49 @@ class WorkflowAgentV2:
                     messages.append(AssistantMessage(content=msg["content"]))
             self._agent.load_history(messages)
 
-        # Log prompt context for debugging
+        # Step 3: Agent loop (LLM may call trigger_flow for intent flows)
         self._log_prompt_context(message)
 
-        # Call Agent
         try:
-            response = await self._agent.query(message)
-            return response
+            return await self._agent.query(message)
         except TaskComplete as e:
             return e.message
 
+    async def _execute_keyword_flow(self, match_result: FlowMatchResult) -> str:
+        """
+        Execute keyword-matched flow via trigger_flow tool.
+
+        Skip LLM, call trigger_flow directly through Agent's tool_map.
+        """
+        flow = match_result.flow
+        flow_id = flow.flow_id or flow.name
+
+        logger.info(f"Keyword matched, executing flow: {flow_id}")
+
+        # Get trigger_flow tool from Agent's tool_map
+        trigger_tool = self._agent._tool_map.get(TRIGGER_FLOW_TOOL_NAME)
+        if not trigger_tool:
+            logger.warning("trigger_flow tool not configured")
+            return f"Flow {flow_id} matched but trigger_flow tool not configured"
+
+        # Execute directly (same tool that LLM would call)
+        result = await trigger_tool.execute(flow_id=flow_id)
+        return str(result) if result else f"Flow {flow_id} executed"
+
     def _log_prompt_context(self, user_message: str):
         """Log prompt context for debugging."""
-        history_count = len(self._agent.messages)
-        system_prompt_len = len(self._system_prompt)
-        tools_count = len(self._workflow_tools)
+        if not logger.isEnabledFor(logging.DEBUG):
+            return
 
         logger.debug(
             f"[Prompt Context] "
-            f"history_msgs={history_count}, "
-            f"system_prompt_len={system_prompt_len}, "
-            f"tools={tools_count}, "
-            f"user_msg_len={len(user_message)}"
+            f"history={len(self._agent.messages)}, "
+            f"tools={len(self._workflow_tools)}, "
+            f"msg_len={len(user_message)}"
         )
 
-        # Log detailed context at trace level (if enabled)
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(f"[System Prompt]\n{self._system_prompt[:500]}...")
-            logger.debug(f"[User Message] {user_message[:200]}...")
-
-            # Log history summary
-            if self._agent.messages:
-                history_summary = []
-                for i, msg in enumerate(self._agent.messages[-5:]):  # Last 5 messages
-                    role = type(msg).__name__
-                    content_preview = str(msg.content)[:50] if msg.content else ""
-                    history_summary.append(f"  [{i}] {role}: {content_preview}...")
-                logger.debug(f"[History (last 5)]\n" + "\n".join(history_summary))
-
     async def query_stream(self, message: str):
-        """
-        Stream process user message.
-
-        Yields:
-            AgentEvent instance
-        """
+        """Stream process user message."""
         async for event in self._agent.query_stream(message):
             yield event
 

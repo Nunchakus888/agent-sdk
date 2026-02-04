@@ -173,7 +173,7 @@ When starting a new conversation, greet the user with:
         """构建能力定义部分
 
         注意：Tools 不在此处列出，因为已通过原生 tools API 传递给 LLM。
-        这里只列出高级抽象概念（Skills、Flows、System Actions）。
+        这里只列出高级抽象概念（Skills、Flows、action_books）。
         """
         sections = []
 
@@ -193,15 +193,26 @@ When starting a new conversation, greet the user with:
             if skill_lines:
                 sections.append("### Skills\n" + "\n".join(skill_lines))
 
-        # Flows - 业务流程说明
+        # Flows - 只描述 intent 类型的 flows（keyword 类型由代码匹配，无需 LLM 参与）
         flows = getattr(self.config, 'flows', [])
         if flows:
-            flow_lines = []
+            intent_flows = []
             for f in flows:
+                # 只包含 intent 类型的 flows
+                flow_type = getattr(f, 'type', None)
+                if flow_type and str(flow_type).lower() == 'keyword':
+                    continue  # 跳过 keyword 类型
+
                 fid = getattr(f, 'flow_id', None) or getattr(f, 'name', None) or 'unknown'
                 desc = getattr(f, 'description', None) or f'Execute flow {fid}'
-                flow_lines.append(f"- **{fid}**: {desc}")
-            sections.append("### Flows\n" + "\n".join(flow_lines))
+                intent_flows.append(f"- `{fid}`: {desc}")
+
+            if intent_flows:
+                sections.append(
+                    "### Intent Flows\n"
+                    "When user intent matches one of the following, call `trigger_flow` tool with the corresponding flow_id:\n"
+                    + "\n".join(intent_flows)
+                )
 
         # System Actions - 特殊系统行为
         system_actions = getattr(self.config, 'system_actions', [])
