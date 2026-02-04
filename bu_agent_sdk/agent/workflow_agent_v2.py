@@ -6,12 +6,12 @@ Core design:
 2. Convert all actions (skills, tools, system) to Tool instances
 3. Reuse Agent's compaction, token tracking, retry capabilities
 4. SOP as system prompt injected
-5. Flow matching: keyword (code-based) + intent (LLM via trigger_flow tool)
+5. Flow matching: keyword (code-based) + intent (LLM via flow_executor tool)
 
 Flow execution:
-- Keyword flows: matched by code, executed via trigger_flow tool directly
-- Intent flows: LLM calls trigger_flow tool with flow_id
-- Unified execution through trigger_flow tool defined in config
+- Keyword flows: matched by code, executed via flow_executor tool directly
+- Intent flows: LLM calls flow_executor tool with flow_id
+- Unified execution through flow_executor tool defined in config
 """
 
 import logging
@@ -31,7 +31,7 @@ from bu_agent_sdk.tokens import UsageSummary
 
 logger = logging.getLogger("agent_sdk.workflow_agent")
 
-TRIGGER_FLOW_TOOL_NAME = "trigger_flow"
+TRIGGER_FLOW_TOOL_NAME = "flow_executor"
 
 
 def _create_http_tool_wrapper(http_tool: HttpTool) -> Tool:
@@ -70,10 +70,10 @@ class WorkflowAgentV2:
     """
     Workflow Agent based on bu_agent_sdk.Agent.
 
-    Flow execution is unified through trigger_flow tool:
-    - Keyword match: code matches, then calls trigger_flow directly
-    - Intent match: LLM calls trigger_flow with flow_id
-    - Both use the same trigger_flow tool defined in config
+    Flow execution is unified through flow_executor tool:
+    - Keyword match: code matches, then calls flow_executor directly
+    - Intent match: LLM calls flow_executor with flow_id
+    - Both use the same flow_executor tool defined in config
     """
 
     config: WorkflowConfigSchema
@@ -113,7 +113,7 @@ class WorkflowAgentV2:
         """Build workflow tools from config."""
         tools: list[Tool] = []
 
-        # HTTP Tools (includes trigger_flow)
+        # HTTP Tools (includes flow_executor)
         if self.config.tools:
             for tool_config in self.config.tools:
                 http_tool = HttpTool(config=ToolConfig(**tool_config))
@@ -148,8 +148,8 @@ class WorkflowAgentV2:
 
         Flow:
         1. Try keyword matching (fast, deterministic)
-        2. If matched, call trigger_flow tool directly
-        3. If not matched, enter Agent loop (LLM may call trigger_flow)
+        2. If matched, call flow_executor tool directly
+        3. If not matched, enter Agent loop (LLM may call flow_executor)
         """
         # Step 1: Keyword matching
         if self._flow_matcher.has_keyword_flows:
@@ -167,7 +167,7 @@ class WorkflowAgentV2:
                     messages.append(AssistantMessage(content=msg["content"]))
             self._agent.load_history(messages)
 
-        # Step 3: Agent loop (LLM may call trigger_flow for intent flows)
+        # Step 3: Agent loop (LLM may call flow_executor for intent flows)
         self._log_prompt_context(message)
 
         try:
@@ -177,20 +177,20 @@ class WorkflowAgentV2:
 
     async def _execute_keyword_flow(self, match_result: FlowMatchResult) -> str:
         """
-        Execute keyword-matched flow via trigger_flow tool.
+        Execute keyword-matched flow via flow_executor tool.
 
-        Skip LLM, call trigger_flow directly through Agent's tool_map.
+        Skip LLM, call flow_executor directly through Agent's tool_map.
         """
         flow = match_result.flow
         flow_id = flow.flow_id or flow.name
 
         logger.info(f"Keyword matched, executing flow: {flow_id}")
 
-        # Get trigger_flow tool from Agent's tool_map
+        # Get flow_executor tool from Agent's tool_map
         trigger_tool = self._agent._tool_map.get(TRIGGER_FLOW_TOOL_NAME)
         if not trigger_tool:
-            logger.warning("trigger_flow tool not configured")
-            return f"Flow {flow_id} matched but trigger_flow tool not configured"
+            logger.warning("flow_executor tool not configured")
+            return f"Flow {flow_id} matched but flow_executor tool not configured"
 
         # Execute directly (same tool that LLM would call)
         result = await trigger_tool.execute(flow_id=flow_id)

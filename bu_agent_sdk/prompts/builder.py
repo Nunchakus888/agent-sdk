@@ -210,7 +210,7 @@ When starting a new conversation, greet the user with:
             if intent_flows:
                 sections.append(
                     "### Intent Flows\n"
-                    "When user intent matches one of the following, call `trigger_flow` tool with the corresponding flow_id:\n"
+                    "When user intent matches one of the following, call `flow_executor` tool with the corresponding flow_id:\n"
                     + "\n".join(intent_flows)
                 )
 

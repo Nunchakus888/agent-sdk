@@ -3,7 +3,7 @@ Flow Matcher - Keyword matching for flows.
 
 Design principles:
 1. Single responsibility - FlowMatcher only handles matching, not execution
-2. Execution is delegated to trigger_flow tool (defined in config)
+2. Execution is delegated to flow_executor tool (defined in config)
 3. Keyword matching is fast, deterministic, zero LLM cost
 """
 
@@ -67,7 +67,7 @@ class FlowMatcher:
     """
     Flow matcher - keyword matching only.
 
-    Execution is delegated to trigger_flow tool.
+    Execution is delegated to flow_executor tool.
 
     Usage:
         matcher = FlowMatcher(flows=config.flows)
@@ -75,7 +75,7 @@ class FlowMatcher:
         # Try keyword matching
         result = matcher.match_keyword(user_message)
         if result.matched:
-            # Call trigger_flow tool with flow_id
+            # Call flow_executor tool with flow_id
             await trigger_flow_tool.execute(flow_id=result.flow.flow_id)
     """
 
