@@ -74,10 +74,16 @@ class WorkflowAgentV2:
     - Keyword match: code matches, then calls flow_executor directly
     - Intent match: LLM calls flow_executor with flow_id
     - Both use the same flow_executor tool defined in config
+
+    Context variables (context_vars) are used to inject system parameters
+    into HTTP tools at runtime. These are NOT exposed to LLM, but are used
+    to fill placeholders like {chatbotId}, {tenantId}, {sessionId} in
+    tool endpoint configurations.
     """
 
     config: WorkflowConfigSchema
     llm: BaseChatModel | LLMProvider
+    context_vars: dict[str, Any] = field(default_factory=dict)
     compaction: CompactionConfig | None = None
     include_cost: bool = False
 
@@ -110,13 +116,21 @@ class WorkflowAgentV2:
         )
 
     def _build_workflow_tools(self) -> list[Tool]:
-        """Build workflow tools from config."""
+        """Build workflow tools from config.
+
+        HTTP tools receive context_vars for system parameter injection.
+        Placeholders like {chatbotId}, {tenantId} in endpoint config
+        will be filled from context_vars at execution time.
+        """
         tools: list[Tool] = []
 
-        # HTTP Tools (includes flow_executor)
+        # HTTP Tools (includes flow_executor, actionbook_executor, etc.)
         if self.config.tools:
             for tool_config in self.config.tools:
-                http_tool = HttpTool(config=ToolConfig(**tool_config))
+                http_tool = HttpTool(
+                    config=ToolConfig(**tool_config),
+                    context_vars=self.context_vars,
+                )
                 tools.append(_create_http_tool_wrapper(http_tool))
 
         # Skills
@@ -125,11 +139,6 @@ class WorkflowAgentV2:
                 skill_id = skill.get("skill_id", "unknown") if isinstance(skill, dict) else skill.skill_id
                 description = skill.get("description", "") if isinstance(skill, dict) else skill.description
                 tools.append(_create_skill_tool(skill_id, description, None))
-
-        # action_books
-        if self.config.action_books:
-            # action_books are converted to tools, just pick the condition to match the intent
-            pass
 
         return tools
 

@@ -214,6 +214,26 @@ When starting a new conversation, greet the user with:
                     + "\n".join(intent_flows)
                 )
 
+        # Action Books - 条件触发 actionbook_executor
+        action_books = getattr(self.config, 'action_books', [])
+        if action_books:
+            conditions = []
+            for i, ab in enumerate(action_books, 1):
+                if isinstance(ab, dict):
+                    condition = ab.get('condition', '')
+                else:
+                    condition = getattr(ab, 'condition', '')
+                if condition:
+                    conditions.append(f"- **Condition {i}**: {condition}")
+
+            if conditions:
+                sections.append(
+                    "### Action Books\n"
+                    "When user intent matches ANY of the following conditions, "
+                    "call `actionbook_executor` tool with the user's message:\n"
+                    + "\n".join(conditions)
+                )
+
         # System Actions - 特殊系统行为
         system_actions = getattr(self.config, 'system_actions', [])
         if system_actions:

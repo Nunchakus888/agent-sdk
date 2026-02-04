@@ -26,8 +26,48 @@ Usage:
 import json
 import re
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Any, Literal
+
+
+# =============================================================================
+# Placeholder Pattern Configuration
+# =============================================================================
+
+class PlaceholderStyle(str, Enum):
+    """Placeholder style for parameter substitution."""
+    SINGLE_BRACE = "single"   # {param} - default
+    DOUBLE_BRACE = "double"   # {{param}} - Jinja2 style
+
+
+# Default placeholder style
+DEFAULT_PLACEHOLDER_STYLE = PlaceholderStyle.DOUBLE_BRACE
+
+
+def _get_placeholder_patterns(style: PlaceholderStyle) -> tuple[str, str, list[tuple[str, str]]]:
+    """Get regex patterns for placeholder substitution.
+
+    Returns:
+        Tuple of (full_pattern, partial_pattern, escape_pairs)
+        escape_pairs: list of (escape_sequence, literal_char) tuples
+
+    Examples:
+        SINGLE_BRACE: {param} -> value, {{ -> {, }} -> } (escape)
+        DOUBLE_BRACE: {{param}} -> value, {{{{ -> {{, }}}} -> }} (escape)
+    """
+    if style == PlaceholderStyle.DOUBLE_BRACE:
+        return (
+            r"\{\{(\w+)\}\}",      # Full match: {{param}}
+            r"\{\{(\w+)\}\}",      # Partial match: {{param}}
+            [("{{{{", "{{"), ("}}}}", "}}")],  # Escape pairs
+        )
+    else:  # SINGLE_BRACE (default)
+        return (
+            r"\{(\w+)\}",          # Full match: {param}
+            r"\{(\w+)\}",          # Partial match: {param}
+            [("{{", "{"), ("}}", "}")],  # Escape pairs
+        )
 
 import httpx
 from pydantic import BaseModel, Field, field_validator
@@ -243,6 +283,8 @@ class HttpTool:
     http_client: httpx.AsyncClient | None = None
     context_vars: dict[str, Any] = field(default_factory=dict)
     """Context variables for auto-fill (e.g., dialogId, tenantId)"""
+    placeholder_style: PlaceholderStyle = field(default=DEFAULT_PLACEHOLDER_STYLE)
+    """Placeholder style: 'single' for {param}, 'double' for {{param}}"""
 
     _definition: ToolDefinition | None = field(default=None, repr=False)
 
@@ -294,30 +336,48 @@ class HttpTool:
     def _substitute_placeholders(
         self, template: Any, params: dict[str, Any]
     ) -> Any:
-        """Substitute {param} placeholders in template with actual values.
+        """Substitute placeholders in template with actual values.
+
+        Supports configurable placeholder styles:
+        - SINGLE_BRACE: {param} -> value, {{ -> {, }} -> } (escape)
+        - DOUBLE_BRACE: {{param}} -> value, {{{{ -> {{, }}}} -> }} (escape)
 
         Handles:
-        - String values: "{param}" -> actual value
+        - String values: "{param}" or "{{param}}" -> actual value
         - Nested dicts and lists
         - Special marker "todo_autofill_by_system" -> context_vars
+        - Unfilled full placeholders return None (filtered from dict)
+        - Escape sequences for literal braces
         """
         if isinstance(template, str):
             # Check for "todo_autofill_by_system" marker
             if template == "todo_autofill_by_system":
-                # Try to find matching key in context_vars
                 return None  # Will be filled by context
 
-            # Check for full placeholder replacement: "{param}"
-            match = re.fullmatch(r"\{(\w+)\}", template)
+            # Get patterns based on placeholder style
+            full_pattern, partial_pattern, escape_pairs = \
+                _get_placeholder_patterns(self.placeholder_style)
+
+            # Check for full placeholder replacement
+            match = re.fullmatch(full_pattern, template)
             if match:
                 param_name = match.group(1)
                 if param_name in params:
                     return params[param_name]
                 if param_name in self.context_vars:
                     return self.context_vars[param_name]
-                return template  # Keep as-is if not found
+                # Return None for unfilled placeholders (will be filtered from dict)
+                return None
 
-            # Partial substitution for strings containing placeholders
+            # Step 1: Replace escape sequences with temporary markers
+            result = template
+            markers = []
+            for i, (escape_seq, literal_char) in enumerate(escape_pairs):
+                marker = f"\x00ESC{i}\x00"
+                markers.append((marker, literal_char))
+                result = result.replace(escape_seq, marker)
+
+            # Step 2: Substitute placeholders
             def replacer(m: re.Match) -> str:
                 param_name = m.group(1)
                 if param_name in params:
@@ -326,13 +386,19 @@ class HttpTool:
                     return str(self.context_vars[param_name])
                 return m.group(0)
 
-            return re.sub(r"\{(\w+)\}", replacer, template)
+            result = re.sub(partial_pattern, replacer, result)
+
+            # Step 3: Restore escape sequences to literal characters
+            for marker, literal_char in markers:
+                result = result.replace(marker, literal_char)
+
+            return result
 
         elif isinstance(template, dict):
             result = {}
             for k, v in template.items():
                 substituted = self._substitute_placeholders(v, params)
-                # Skip None values (unfilled todo_autofill_by_system)
+                # Skip None values (unfilled placeholders)
                 if substituted is not None:
                     result[k] = substituted
             return result

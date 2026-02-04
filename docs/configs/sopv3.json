@@ -24,17 +24,83 @@
       }
     },
     {
-      "name": "trigger_flow",
-      "description": "Trigger a predefined flow execution based on user intent",
+      "name": "actionbook_executor",
+      "description": "Execute an action book based on the user intent",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "description": "The message to execute the action book",
+            "type": "string"
+          },
+          "properties": {
+            "autofill_params": {
+              "type": "object",
+              "properties": {},
+              "required": []
+            },
+            "chatbot_id": {
+              "type": "string"
+            },
+            "customer_id": {
+              "type": "string"
+            },
+            "is_preview": {
+              "type": "boolean"
+            },
+            "md5_checksum": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "preview_action_book_ids": {
+              "type": "array",
+              "items": {}
+            },
+            "session_id": {
+              "type": "string"
+            },
+            "session_title": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string"
+            },
+            "tenant_id": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "message"
+        ]
+      },
+      "endpoint": {
+        "url": "http://yunpian-attila-security:8080/actionbookService/execute",
+        "method": "POST",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "message": "{message}"
+        }
+      }
+    },
+    {
+      "name": "flow_executor",
+      "description": "Trigger a predefined business flow. Use this tool when user intent matches an available flow from the Intent Flows list. Pass the corresponding flow_id to execute the matched flow.",
       "parameters": {
         "type": "object",
         "properties": {
           "flow_id": {
-            "description": "The ID of the flow to trigger",
+            "description": "The unique identifier of the flow to trigger. Must be one of the flow_id values from the Intent Flows list in system prompt.",
             "type": "string"
           }
         },
-        "required": []
+        "required": [
+          "flow_id"
+        ]
       },
       "endpoint": {
         "url": "http://yunpian-attila-security:8080/chatbot/ai-inner/trigger-flow",
@@ -663,7 +729,22 @@
     "chatbot_id": "6982b54ab0156d11ca09e76a"
   },
   "retrieve_knowledge_url": "http://121.43.165.245:18080/chatbot/ai-inner/retrieve-knowledge",
-  "action_books": [],
+  "action_books": [
+    {
+      "condition": "1. Wants to schedule a demo 2. Requests detailed product/service information 3. Needs salesperson or account manager 4. Reveals purchase intention 5. Compares products between brands 6. Wants to sign up or get free trial 7. Asks for E-books or whitepapers 8. Inquires about pricing 9. Provide any contact information",
+      "action": "Persuade the customer to provide required information, then save the customer's information using the save_customer_information tool",
+      "tools": [
+        "save_customer_information"
+      ]
+    },
+    {
+      "condition": "The customer clearly expresses the intention to transfer to a human agent ",
+      "action": "Transfer to a human agent using the handoff_to tool and assign it to the team type and assignee is xyz.",
+      "tools": [
+        "handoff_to"
+      ]
+    }
+  ],
   "system_actions": [
     "hand_off",
     "close_conversation",
@@ -672,6 +753,6 @@
   ],
   "agent_actions": [
     "get_contact_info",
-    "trigger_flow"
+    "flow_executor"
   ]
 }
