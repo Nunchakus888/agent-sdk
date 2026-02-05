@@ -1,255 +1,196 @@
-# bu-agent-sdk
+# FastAPI Web API 使用指南
 
-_An agent is just a for-loop._
+## 快速开始
 
-![Agent Loop](./static/agent-loop.png)
+### 1. 本地运行
 
-The simplest possible agent framework. No abstractions. No magic. Just a for-loop of tool calls. The framework powering [BU.app](https://bu.app).
+#### 安装依赖
 
-## Install
-
-```bash
-uv sync
-```
-
-or
+推荐使用 `uv` 进行包管理（更快、更可靠）：
 
 ```bash
-uv add bu-agent-sdk
+# 安装 uv（如果还没有安装）
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# 安装项目依赖（包括 API 依赖）
+uv pip install -e ".[api]"
+
+# 或者使用传统 pip
+pip install -e ".[api]"
 ```
 
-## Quick Start
+#### 配置环境变量
 
-```python
-import asyncio
-from bu_agent_sdk import Agent, tool, TaskComplete
-from bu_agent_sdk.llm import ChatAnthropic
+创建 `.env` 文件：
 
-@tool("Add two numbers")
-async def add(a: int, b: int) -> int:
-    return a + b
-
-@tool("Signal task completion")
-async def done(message: str) -> str:
-    raise TaskComplete(message)
-
-agent = Agent(
-    llm=ChatAnthropic(model="claude-sonnet-4-20250514"),
-    tools=[add, done],
-)
-
-async def main():
-    result = await agent.query("What is 2 + 3?")
-    print(result)
-
-asyncio.run(main())
+```bash
+cp .env.example .env
 ```
 
-## Philosophy
+编辑 `.env` 文件，填写必要配置：
 
-**The Bitter Lesson:** All the value is in the RL'd model, not your 10,000 lines of abstractions.
-
-Agent frameworks fail not because models are weak, but because their action spaces are incomplete. Give the LLM as much freedom as possible, then vibe-restrict based on evals.
-
-## Features
-
-### Done Tool Pattern
-
-The naive "stop when no tool calls" approach fails. Agents finish prematurely. Force explicit completion:
-
-```python
-@tool("Signal completion")
-async def done(message: str) -> str:
-    raise TaskComplete(message)
-
-agent = Agent(
-    llm=llm,
-    tools=[..., done],
-    require_done_tool=True,  # Autonomous mode
-)
+```env
+OPENAI_API_KEY=sk-your-key-here
+DEFAULT_MODEL=gpt-4o
+INTENT_MATCHING_MODEL=gpt-4o-mini  # 可选：优化成本
 ```
 
-### Ephemeral Messages
+#### 启动服务
 
-Large tool outputs (browser state, screenshots) blow up context. Keep only the last N:
-
-```python
-@tool("Get browser state", ephemeral=3)  # Keep last 3 only
-async def get_state() -> str:
-    return massive_dom_and_screenshot
+```bash
+python -m api.main
 ```
 
-### Simple LLM Primitives
+或使用 uvicorn：
 
-~300 lines per provider. Same interface. Full control:
-
-```python
-from bu_agent_sdk.llm import ChatAnthropic, ChatOpenAI, ChatGoogle
-
-# All implement BaseChatModel
-agent = Agent(llm=ChatAnthropic(model="claude-sonnet-4-20250514"), tools=tools)
-agent = Agent(llm=ChatOpenAI(model="gpt-4o"), tools=tools)
-agent = Agent(llm=ChatGoogle(model="gemini-2.0-flash"), tools=tools)
+```bash
+uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### Context Compaction
+服务启动后访问：
+- API 文档：http://localhost:8000/docs
+- ReDoc 文档：http://localhost:8000/redoc
+- 健康检查：http://localhost:8000/api/v1/health
 
-Auto-summarize when approaching context limits:
+### 2. Docker 运行
 
-```python
-from bu_agent_sdk.agent import CompactionConfig
+#### 构建镜像
 
-agent = Agent(
-    llm=llm,
-    tools=tools,
-    compaction=CompactionConfig(threshold_ratio=0.80),
-)
+```bash
+docker build -t workflow-agent-api .
 ```
 
-### Dependency Injection
+#### 运行容器
 
-FastAPI-style, type-safe:
-
-```python
-from typing import Annotated
-from bu_agent_sdk import Depends
-
-def get_db():
-    return Database()
-
-@tool("Query users")
-async def get_user(id: int, db: Annotated[Database, Depends(get_db)]) -> str:
-    return await db.find(id)
+```bash
+docker run -d \
+  -p 8000:8000 \
+  -e OPENAI_API_KEY=sk-your-key-here \
+  -v $(pwd)/config:/app/config \
+  --name workflow-agent \
+  workflow-agent-api
 ```
 
-### Streaming Events
+### 3. Docker Compose 运行（推荐）
 
-```python
-from bu_agent_sdk.agent import ToolCallEvent, ToolResultEvent, FinalResponseEvent
+```bash
+# 启动所有服务（包括 MongoDB、Redis）
+docker-compose up -d
 
-async for event in agent.query_stream("do something"):
-    match event:
-        case ToolCallEvent(tool=name, args=args):
-            print(f"Calling {name}")
-        case ToolResultEvent(tool=name, result=result):
-            print(f"{name} -> {result[:50]}")
-        case FinalResponseEvent(content=text):
-            print(f"Done: {text}")
+# 查看日志
+docker-compose logs -f workflow-agent
+
+# 停止服务
+docker-compose down
 ```
 
-## Claude Code in 100 Lines
+## API 接口说明
 
-A sandboxed coding assistant with dependency injection:
+### 1. 查询接口
 
-```python
-import asyncio
-import subprocess
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Annotated
-
-from bu_agent_sdk import Agent
-from bu_agent_sdk.llm import ChatAnthropic
-from bu_agent_sdk.tools import Depends, tool
+#### POST `/api/v1/query`
 
 
-@dataclass
-class SandboxContext:
-    """All file operations restricted to root_dir."""
-    root_dir: Path
-    working_dir: Path
+### 常见错误码
 
-    def resolve_path(self, path: str) -> Path:
-        resolved = (self.working_dir / path).resolve()
-        resolved.relative_to(self.root_dir)  # Raises if escapes
-        return resolved
+| 状态码 | 说明 | 处理方式 |
+|-------|------|---------|
+| 400 | 请求参数错误 | 检查请求参数格式 |
+| 404 | 会话不存在 | 使用有效的 session_id |
+| 500 | 服务器内部错误 | 查看服务器日志，联系管理员 |
 
 
-def get_sandbox() -> SandboxContext:
-    raise RuntimeError("Override via dependency_overrides")
+
+## 监控和日志
 
 
-@tool("Execute shell command")
-async def bash(command: str, ctx: Annotated[SandboxContext, Depends(get_sandbox)]) -> str:
-    result = subprocess.run(command, shell=True, capture_output=True, text=True, cwd=ctx.working_dir)
-    return result.stdout + result.stderr or "(no output)"
 
+### 健康检查
 
-@tool("Read file contents")
-async def read(path: str, ctx: Annotated[SandboxContext, Depends(get_sandbox)]) -> str:
-    return ctx.resolve_path(path).read_text()
+```bash
+# 使用健康检查端点
+curl http://localhost:8000/api/v1/health
 
-
-@tool("Write file contents")
-async def write(path: str, content: str, ctx: Annotated[SandboxContext, Depends(get_sandbox)]) -> str:
-    ctx.resolve_path(path).write_text(content)
-    return f"Wrote {len(content)} bytes"
-
-
-@tool("Find files by glob pattern")
-async def glob(pattern: str, ctx: Annotated[SandboxContext, Depends(get_sandbox)]) -> str:
-    files = [str(f.relative_to(ctx.root_dir)) for f in ctx.working_dir.glob(pattern)]
-    return "\n".join(files) or "No matches"
-
-
-@tool("Signal task completion")
-async def done(message: str) -> str:
-    from bu_agent_sdk.agent import TaskComplete
-    raise TaskComplete(message)
-
-
-async def main():
-    # Create sandbox
-    root = Path("./sandbox")
-    root.mkdir(exist_ok=True)
-    ctx = SandboxContext(root_dir=root.resolve(), working_dir=root.resolve())
-
-    agent = Agent(
-        llm=ChatAnthropic(model="claude-sonnet-4-20250514"),
-        tools=[bash, read, write, glob, done],
-        system_prompt=f"Coding assistant. Working dir: {ctx.working_dir}",
-        dependency_overrides={get_sandbox: lambda: ctx},
-    )
-
-    print("Agent ready. Ctrl+C to exit.")
-    while True:
-        task = input("\n> ")
-        async for event in agent.query_stream(task):
-            if hasattr(event, "tool"):
-                print(f"  → {event.tool}")
-            elif hasattr(event, "content") and event.content:
-                print(f"\n{event.content}")
-
-
-asyncio.run(main())
+# Docker 健康检查
+docker inspect --format='{{.State.Health.Status}}' workflow-agent
 ```
 
-See [`bu_agent_sdk/examples/claude_code.py`](./bu_agent_sdk/examples/claude_code.py) for the full version with grep, edit, and todo tools.
+## 部署建议
 
-## Examples
+### 生产环境配置
 
-See [`bu_agent_sdk/examples/`](./bu_agent_sdk/examples/) for more:
 
-- `claude_code.py` - Full Claude Code clone with sandboxed filesystem
-- `dependency_injection.py` - FastAPI-style dependency injection
+### 扩展性建议
 
-## The Bitter Truth
+1. **水平扩展**：运行多个 API 实例 + 负载均衡
+2. **会话持久化**：使用 Redis/MongoDB 存储会话
+3. **异步任务队列**：使用 Celery 处理长时间运行的任务
+4. **微服务化**：参考 [workflow-agent-deployment.md](../docs/workflow-agent-deployment.md)
 
-Every abstraction is a liability. Every "helper" is a failure point.
+## 故障排查
 
-The models got good. Really good. They were RL'd on computer use, coding, browsing. They don't need your guardrails. They need:
 
-- A complete action space
-- A for-loop
-- An explicit exit
-- Context management
 
-**The bitter lesson: The less you build, the more it works.**
+## 测试
 
-## License
+### 运行单元测试
 
-MIT
+API 提供了完整的单元测试套件，覆盖所有端点和功能。
 
-## Credits
+```bash
+# 安装测试依赖（使用 uv，推荐）
+uv pip install -e ".[test]"
 
-Built by [Browser Use](https://browser-use.com). Inspired by reverse-engineering Claude Code and Gemini CLI.
+# 或使用传统 pip
+pip install -e ".[test]"
+
+# 运行所有测试
+pytest tests/test_api.py -v
+
+# 运行特定测试
+pytest tests/test_api.py::test_query_endpoint_success -v
+
+# 查看测试覆盖率
+pytest tests/test_api.py --cov=api --cov-report=html
+```
+
+### 测试覆盖范围
+
+测试套件涵盖以下方面：
+
+1. **查询接口测试**
+   - ✅ 成功查询
+   - ✅ 缺少必填字段
+   - ✅ 空消息验证
+   - ✅ 可选字段处理
+   - ✅ Agent 错误处理
+
+2. **会话管理测试**
+   - ✅ 获取已存在会话
+   - ✅ 获取不存在会话（404）
+   - ✅ 删除会话
+   - ✅ 会话隔离
+
+3. **健康检查测试**
+   - ✅ 基本健康检查
+   - ✅ 会话计数
+
+4. **错误处理测试**
+   - ✅ 无效 JSON
+   - ✅ 错误的 HTTP 方法
+   - ✅ 不存在的端点
+
+5. **集成测试**
+   - ✅ 完整工作流（查询 → 获取会话 → 删除会话）
+   - ✅ 并发请求
+
+6. **API 文档测试**
+   - ✅ OpenAPI schema
+   - ✅ Swagger UI
+   - ✅ ReDoc UI
+
+7. **CORS 测试**
+   - ✅ CORS 头部验证
+
+8. **数据模型测试**
+   - ✅ Pydantic 模型验证
