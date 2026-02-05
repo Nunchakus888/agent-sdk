@@ -122,6 +122,12 @@ def create_api_app(
     setup_exception_handlers(fastapi_app)
 
     # 注册路由
+    # V1 Chat
+    fastapi_app.include_router(
+        chat_v1.create_router(),
+        prefix="/api/v1",
+        tags=["Chat"],
+    )
     fastapi_app.include_router(
         query_v2.create_router(),
         prefix="/api",
@@ -131,11 +137,6 @@ def create_api_app(
         health.create_router(),
         prefix="/api/v1",
         tags=["Health"],
-    )
-    fastapi_app.include_router(
-        chat_v1.create_router(),
-        prefix="/api/v1",
-        tags=["Chat"],
     )
 
     # 挂载 Chat Web UI
