@@ -155,10 +155,10 @@ class HttpConfigLoader:
             ValueError: 响应数据格式错误
         """
         
-        config_path = "docs/configs/sopv3.json"
+        # config_path = "docs/configs/sopv3.json"
         
-        with open(config_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        # with open(config_path, "r", encoding="utf-8") as f:
+        #     return json.load(f)
 
         url = API.build_url(API.GET_AGENT_CONFIG, base_url=get_chatbot_host())
         

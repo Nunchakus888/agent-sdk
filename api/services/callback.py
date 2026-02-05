@@ -4,8 +4,6 @@ Callback 服务模块
 提供统一的回调发送功能，供 chat API 和其他模块使用。
 """
 
-import os
-import uuid
 from datetime import datetime, timezone
 from enum import IntEnum
 from typing import Optional
@@ -14,6 +12,7 @@ import httpx
 from pydantic import BaseModel, Field, field_validator
 
 from api.core.logging import get_logger
+from api.utils.config.api_config import API, get_callback_host
 
 logger = get_logger(__name__)
 
@@ -91,13 +90,13 @@ class CallbackService:
     @property
     def callback_host(self) -> str:
         """获取回调地址"""
-        host = self._callback_host or os.getenv("CHAT_CALLBACK_HOST", "")
+        host = self._callback_host or get_callback_host() or ""
         return host.rstrip("/")
 
     @property
     def callback_url(self) -> str:
         """获取完整回调 URL"""
-        return f"{self.callback_host}/api/callback/agent/receive"
+        return API.build_url(API.CALLBACK_AGENT_RECEIVE, base_url=self.callback_host)
 
     async def send(self, payload: CallbackPayload) -> bool:
         """
