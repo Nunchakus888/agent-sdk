@@ -1,20 +1,7 @@
 # =============================================================================
-# Stage 1: Build Chat UI
+# Python Application (Chat UI 预构建版本)
 # =============================================================================
-FROM node:20-alpine AS chat-builder
-
-WORKDIR /app/chat
-
-# Copy chat UI source
-COPY api/chat/package*.json ./
-RUN npm ci --registry=https://registry.npmmirror.com
-
-COPY api/chat/ ./
-RUN npm run build
-
-
-# =============================================================================
-# Stage 2: Python Application
+# 注意: 需要先在本地执行 cd api/chat && npm run build 生成 dist 目录
 # =============================================================================
 FROM python:3.13-slim AS runtime
 
@@ -32,9 +19,6 @@ RUN uv sync --frozen --no-dev --extra api
 # Copy application code
 COPY bu_agent_sdk/ ./bu_agent_sdk/
 COPY api/ ./api/
-
-# Copy built chat UI from builder stage
-COPY --from=chat-builder /app/chat/dist ./api/chat/dist/
 
 # Environment variables
 ENV PYTHONUNBUFFERED=1 \
