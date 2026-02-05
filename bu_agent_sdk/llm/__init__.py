@@ -7,10 +7,6 @@ This module provides a unified interface for chat models across different provid
 
 from typing import TYPE_CHECKING
 
-# Auto-load .env file for API keys
-from dotenv import load_dotenv
-
-load_dotenv()
 
 # Core types - always imported
 from bu_agent_sdk.llm.base import BaseChatModel, ToolChoice, ToolDefinition

@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "apollo-config-loader"
+version = "1.0.0"
+description = "轻量级 Apollo 配置中心客户端"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+keywords = ["apollo", "config", "configuration", "async"]
+dependencies = [
+    "aiohttp>=3.8.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+]

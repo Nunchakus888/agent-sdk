@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 
 from bu_agent_sdk.agent.workflow_agent import WorkflowAgent
-from bu_agent_sdk.tools.actions import WorkflowConfigSchema
+from bu_agent_sdk.schemas import WorkflowConfigSchema
 from bu_agent_sdk.llm import ChatOpenAI
 
 

@@ -12,14 +12,24 @@ Flow execution:
 - Keyword flows: matched by code, executed via flow_executor tool directly
 - Intent flows: LLM calls flow_executor tool with flow_id
 - Unified execution through flow_executor tool defined in config
+
+ActionBook execution:
+- actionbook_executor is a built-in tool, auto-registered when action_books configured
+- Handles response extraction (data.message) and token accumulation (data.total_tokens)
+- Implementation in actionbook_executor.py module
 """
 
 import logging
 from dataclasses import dataclass, field
 from typing import Any
 
+from bu_agent_sdk.agent.actionbook_executor import (
+    ACTIONBOOK_EXECUTOR_TOOL_NAME,
+    create_actionbook_executor_tool,
+)
 from bu_agent_sdk.agent.compaction import CompactionConfig
 from bu_agent_sdk.agent.flow_matcher import FlowMatcher, FlowMatchResult
+from bu_agent_sdk.agent.knowledge_retriever import KnowledgeRetriever
 from bu_agent_sdk.agent.service import Agent, TaskComplete
 from bu_agent_sdk.llm.base import BaseChatModel, LLMProvider
 from bu_agent_sdk.llm.messages import AssistantMessage, UserMessage
@@ -32,6 +42,7 @@ from bu_agent_sdk.tokens import UsageSummary
 logger = logging.getLogger("agent_sdk.workflow_agent")
 
 TRIGGER_FLOW_TOOL_NAME = "flow_executor"
+ACTIONBOOK_EXECUTOR_TOOL_NAME = "actionbook_executor"
 
 
 def _create_http_tool_wrapper(http_tool: HttpTool) -> Tool:
@@ -93,6 +104,7 @@ class WorkflowAgentV2:
     _workflow_tools: list[Tool] = field(default_factory=list, repr=False)
     _system_prompt: str = field(default="", repr=False)
     _flow_matcher: FlowMatcher = field(default=None, repr=False)
+    _knowledge_retriever: KnowledgeRetriever | None = field(default=None, repr=False)
 
     def __post_init__(self):
         if isinstance(self.llm, LLMProvider):
@@ -103,6 +115,14 @@ class WorkflowAgentV2:
         self._flow_matcher = FlowMatcher(flows=self.config.flows)
         self._workflow_tools = self._build_workflow_tools()
         self._system_prompt = self._build_system_prompt()
+
+        # Initialize knowledge retriever if configured
+        if self.config.retrieve_knowledge_url:
+            self._knowledge_retriever = KnowledgeRetriever(
+                url=self.config.retrieve_knowledge_url,
+                context_vars=self.context_vars,
+                timeout=10.0,
+            )
 
         self._agent = Agent(
             llm=self._llm,
@@ -121,12 +141,28 @@ class WorkflowAgentV2:
         HTTP tools receive context_vars for system parameter injection.
         Placeholders like {chatbotId}, {tenantId} in endpoint config
         will be filled from context_vars at execution time.
+
+        ActionBook executor is automatically added when action_books are configured.
         """
         tools: list[Tool] = []
 
-        # HTTP Tools (includes flow_executor, actionbook_executor, etc.)
+        # ActionBook Executor - built-in tool, auto-registered when action_books configured
+        if self.config.action_books:
+            tools.append(
+                create_actionbook_executor_tool(
+                    context_vars=self.context_vars,
+                    token_accumulator=self._accumulate_external_tokens,
+                )
+            )
+
+        # HTTP Tools (skip actionbook_executor if in config, use built-in instead)
         if self.config.tools:
             for tool_config in self.config.tools:
+                tool_name = tool_config.get("name", "")
+                if tool_name == ACTIONBOOK_EXECUTOR_TOOL_NAME:
+                    logger.debug("Skipping actionbook_executor from config, using built-in")
+                    continue
+
                 http_tool = HttpTool(
                     config=ToolConfig(**tool_config),
                     context_vars=self.context_vars,
@@ -142,31 +178,73 @@ class WorkflowAgentV2:
 
         return tools
 
-    def _build_system_prompt(self) -> str:
-        """Build System Prompt using unified builder."""
+    def _accumulate_external_tokens(self, tokens: int) -> None:
+        """Accumulate external token usage to agent's token cost."""
+        if hasattr(self, '_agent') and self._agent:
+            self._agent._token_cost.add_external_tokens(tokens)
+
+    def _build_system_prompt(self, kb_content: str | None = None) -> str:
+        """Build System Prompt using unified builder.
+
+        Args:
+            kb_content: Optional knowledge base content to inject
+        """
         builder = SystemPromptBuilder(config=self.config)
-        return builder.build()
+        return builder.build(kb_content=kb_content)
+
+    async def _retrieve_knowledge(
+        self,
+        message: str,
+        session_id: str | None = None,
+    ) -> str | None:
+        """
+        Retrieve knowledge from knowledge base.
+
+        Returns formatted knowledge content or None if:
+        - No retriever configured
+        - Retrieval fails
+        - No relevant results
+        """
+        if not self._knowledge_retriever:
+            return None
+
+        return await self._knowledge_retriever.retrieve(
+            query=message,
+            session_id=session_id,
+        )
 
     async def query(
         self,
         message: str,
         context: list[dict] | None = None,
+        session_id: str | None = None,
     ) -> str:
         """
         Process user message.
 
         Flow:
-        1. Try keyword matching (fast, deterministic)
-        2. If matched, call flow_executor tool directly
-        3. If not matched, enter Agent loop (LLM may call flow_executor)
+        1. Retrieve knowledge (if configured)
+        2. Rebuild system prompt with KB content
+        3. Try keyword matching (fast, deterministic)
+        4. If matched, call flow_executor tool directly
+        5. If not matched, enter Agent loop (LLM may call flow_executor)
         """
-        # Step 1: Keyword matching
+        # Step 1: Knowledge retrieval (non-blocking on failure)
+        kb_content = await self._retrieve_knowledge(message, session_id)
+
+        # Step 2: Rebuild system prompt if KB content retrieved
+        if kb_content:
+            new_system_prompt = self._build_system_prompt(kb_content=kb_content)
+            self._agent.system_prompt = new_system_prompt
+            logger.debug(f"System prompt updated with KB content ({len(kb_content)} chars)")
+
+        # Step 3: Keyword matching
         if self._flow_matcher.has_keyword_flows:
             match_result = self._flow_matcher.match_keyword(message)
             if match_result.matched:
                 return await self._execute_keyword_flow(match_result)
 
-        # Step 2: Load context if provided
+        # Step 4: Load context if provided
         if context:
             messages = []
             for msg in context:
@@ -176,7 +254,7 @@ class WorkflowAgentV2:
                     messages.append(AssistantMessage(content=msg["content"]))
             self._agent.load_history(messages)
 
-        # Step 3: Agent loop (LLM may call flow_executor for intent flows)
+        # Step 5: Agent loop (LLM may call flow_executor for intent flows)
         self._log_prompt_context(message)
 
         try:

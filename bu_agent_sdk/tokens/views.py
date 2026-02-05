@@ -109,4 +109,7 @@ class UsageSummary(BaseModel):
     total_cost: float
     entry_count: int
 
+    # External tokens (e.g., from actionbook_executor)
+    external_tokens: int = 0
+
     by_model: dict[str, ModelUsageStats] = Field(default_factory=dict)

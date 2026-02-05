@@ -18,6 +18,7 @@ from api import __version__
 from api.core import setup_logging, get_logger, setup_middlewares, setup_exception_handlers
 from api.routers import health
 from api.routers.v2 import query as query_v2
+from api.routers.v1 import chat as chat_v1
 from api.container import AppContext
 
 # 初始化日志
@@ -36,13 +37,20 @@ async def lifespan(app: FastAPI):
     """
     应用生命周期管理
 
-    启动时：通过 AppContext.create() 初始化所有服务
+    启动时：
+    1. 加载 Apollo 配置（如果配置了）
+    2. 通过 AppContext.create() 初始化所有服务
+
     关闭时：通过 AppContext.shutdown() 清理资源
     """
     logger.info("Starting Workflow Agent API...")
 
     try:
-        # 一行初始化所有服务
+        # Step 1: 加载 Apollo 配置（设置环境变量）
+        from api.utils.apollo_config.loader import load_config_from_env
+        await load_config_from_env()
+
+        # Step 2: 初始化所有服务（使用已设置的环境变量）
         ctx = await AppContext.create()
 
         # 启动 SessionManager 后台任务
@@ -123,6 +131,11 @@ def create_api_app(
         health.create_router(),
         prefix="/api/v1",
         tags=["Health"],
+    )
+    fastapi_app.include_router(
+        chat_v1.create_router(),
+        prefix="/api/v1",
+        tags=["Chat"],
     )
 
     # 挂载 Chat Web UI

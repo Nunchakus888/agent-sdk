@@ -54,6 +54,7 @@ class TokenCost:
         self._pricing_data: dict[str, Any] | None = None
         self._initialized = False
         self._cache_dir = xdg_cache_home() / self.CACHE_DIR_NAME
+        self._external_tokens: int = 0  # External tokens (e.g., from actionbook_executor)
 
     async def initialize(self) -> None:
         """Initialize the service by loading pricing data"""
@@ -269,6 +270,17 @@ class TokenCost:
 
         return entry
 
+    def add_external_tokens(self, tokens: int) -> None:
+        """Add external token usage (e.g., from actionbook_executor).
+
+        These tokens are tracked separately from LLM usage but included
+        in the total usage summary.
+
+        Args:
+            tokens: Number of external tokens to add
+        """
+        self._external_tokens += tokens
+
     def get_usage_tokens_for_model(self, model: str) -> ModelUsageTokens:
         """Get usage tokens for a specific model"""
         filtered_usage = [u for u in self.usage_history if u.model == model]
@@ -360,12 +372,13 @@ class TokenCost:
             total_prompt_cached_cost=total_prompt_cached_cost,
             total_completion_tokens=total_completion,
             total_completion_cost=total_completion_cost,
-            total_tokens=total_tokens,
+            total_tokens=total_tokens + self._external_tokens,
             total_cost=total_prompt_cost
             + total_completion_cost
             + total_prompt_cached_cost,
             entry_count=len(filtered_usage),
             by_model=model_stats,
+            external_tokens=self._external_tokens,
         )
 
     def _format_tokens(self, tokens: int) -> str:
@@ -384,8 +397,9 @@ class TokenCost:
         return summary.by_model
 
     def clear_history(self) -> None:
-        """Clear usage history"""
+        """Clear usage history and external tokens"""
         self.usage_history = []
+        self._external_tokens = 0
 
     async def refresh_pricing_data(self) -> None:
         """Force refresh of pricing data from GitHub"""
