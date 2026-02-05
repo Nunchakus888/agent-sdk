@@ -236,9 +236,9 @@ async def load_config_from_env(apply_env: bool = True) -> Optional[Dict[str, Any
             timeout=int(os.environ.get("APOLLO_TIMEOUT", "30")),
             apply_env=apply_env,
         )
-        logger.info(f"⚙️ Apollo config: loaded {len(config)} items")
+        logger.info(f"✅ Apollo config: loaded {len(config)} items")
         return config
 
     except Exception as e:
-        logger.warning(f"⚠️ Apollo config: failed ({e}), using env defaults")
+        logger.warning(f"❌ Apollo config: failed ({e}), using env defaults")
         return None

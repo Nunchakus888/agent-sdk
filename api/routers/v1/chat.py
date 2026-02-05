@@ -12,11 +12,11 @@ V1 Chat 异步回调 API
 
 import asyncio
 import time
-from typing import Optional
+from typing import Any, Optional
 from dataclasses import dataclass, field
-
+from enum import Enum
 from fastapi import APIRouter, status
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 from api.core.correlation import get_correlation_id
 from api.core.logging import get_logger, LogContext
@@ -42,30 +42,89 @@ ChatCallbackData = CallbackData
 # 请求/响应模型
 # =============================================================================
 
+class EventSourceDTO(Enum):
+    """
+    Source of an event in the session.
 
-class ChatRequest(BaseModel):
-    """Chat 请求"""
-    message: str = Field(..., description="用户消息", min_length=1)
-    session_id: str = Field(..., description="会话ID")
-    chatbot_id: str = Field(..., description="Chatbot ID")
-    tenant_id: str = Field(..., description="租户ID")
-    customer_id: Optional[str] = Field(default=None, description="客户ID")
-    md5_checksum: Optional[str] = Field(default=None, description="配置MD5")
-    timeout: int = Field(default=300, description="超时时间(秒)", ge=1, le=600)
+    Identifies who or what generated the event.
+    """
+    AI_AGENT = "ai_agent"
+    SYSTEM = "system"
+    CUSTOMER = "customer"
+    BACK_UI = "back_ui"
+    PREVIEW_UI = "preview_ui"
+    DEVELOPMENT = "development"
 
-    model_config = ConfigDict(json_schema_extra={
-        "example": {
-            "message": "你好",
-            "session_id": "sess_123",
-            "chatbot_id": "bot_456",
-            "tenant_id": "tenant_789",
-            "timeout": 300
+
+class AgentConfigMixin(BaseModel):
+    """Mixin with common agent config fields for request DTOs."""
+
+    tenant_id: str = Field(
+        default="", description="Tenant ID", examples=["tenant_123xyz"]
+    )
+    chatbot_id: str = Field(
+        default="", description="Chatbot ID", examples=["chatbot_123xyz"]
+    )
+    session_id: str = Field(description="Session ID", examples=["sess_123xyz", "12345"])
+
+    @field_validator("session_id", mode="before")
+    @classmethod
+    def convert_session_id_to_str(cls, v: Any) -> str:
+        """Convert session_id to string if it's a number."""
+        if isinstance(v, (int, float)):
+            return str(v)
+        return v
+
+
+class ChatRequest(AgentConfigMixin):
+    """Chat request"""
+
+    message: str = Field(
+        ..., description="message to send to the AI agent", min_length=1
+    )
+    customer_id: Optional[str] = Field(
+        default=None, description="customer ID, auto-created if not provided"
+    )
+    md5_checksum: Optional[str] = Field(
+        default=None, description="MD5 checksum for config change detection"
+    )
+    timeout: int = Field(
+        default=300, description="timeout in seconds for AI response", ge=1, le=600
+    )
+    source: EventSourceDTO = Field(
+        default=EventSourceDTO.CUSTOMER, description="source of the event"
+    )
+    is_preview: bool = Field(
+        default=False, description="whether to preview actionbooks"
+    )
+    preview_action_book_ids: list[str] = Field(
+        default=[], description="actionbook IDs to preview"
+    )
+    autofill_params: dict = Field(default={}, description="auto-fill params for data-connector")
+    session_title: str = Field(default="", description="title for new sessions")
+    timeout: int = Field(default=300, description="timeout in seconds for AI response", ge=1, le=600)
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "message": "Hello, I need help with my order",
+            "customer_id": "cust_123xy",
+            "session_id": "68d510aedff9455e5b019b3e",  # Required for async chat
+            "tenant_id": "dev-test",
+            "chatbot_id": "68d510aedff9455e5b019b3e",
+            "md5_checksum": "1234567890",
+            "source": EventSourceDTO.BACK_UI,
+            "is_preview": False,
+            "preview_action_book_ids": [],
+            "autofill_params": {},
+            "session_title": "",
+            "timeout": 60,
         }
-    })
+    )
 
 
 class ChatAsyncResponse(BaseModel):
     """异步聊天立即响应"""
+
     status: int = Field(default=202, description="HTTP状态码")
     code: int = Field(default=0, description="业务状态码")
     message: str = Field(default="PROCESSING", description="状态消息")
@@ -102,10 +161,7 @@ class ChatTaskManager:
         self._lock = asyncio.Lock()
 
     async def register(
-        self,
-        session_id: str,
-        correlation_id: str,
-        task: asyncio.Task
+        self, session_id: str, correlation_id: str, task: asyncio.Task
     ) -> Optional[PendingTask]:
         """注册新任务，返回被取消的旧任务（如果有）"""
         async with self._lock:
@@ -140,7 +196,7 @@ _task_manager = ChatTaskManager()
 
 
 async def send_callback(payload: CallbackPayload) -> bool:
-    """发送回调（便捷函数，兼容旧代码）"""
+    """send callback (convenient function, compatible with old code)"""
     return await get_callback_service().send(payload)
 
 
@@ -151,7 +207,7 @@ async def send_callback(payload: CallbackPayload) -> bool:
 
 def create_router() -> APIRouter:
     """创建 V1 Chat 路由"""
-    router = APIRouter(tags=["chat"])
+    router = APIRouter()
 
     def get_deps():
         from api.container import get_session_manager, get_repository_manager
@@ -161,8 +217,8 @@ def create_router() -> APIRouter:
         "/chat",
         response_model=ChatAsyncResponse,
         status_code=status.HTTP_202_ACCEPTED,
-        summary="异步聊天接口",
-        description="立即返回 correlation_id，处理完成后通过回调通知结果",
+        summary="async chat interface",
+        description="return correlation_id immediately, and notify the result via callback after processing",
     )
     async def chat_async(request: ChatRequest):
         start_time = time.time()
@@ -178,7 +234,7 @@ def create_router() -> APIRouter:
             tenant_id=request.tenant_id,
         ):
             async def process_chat():
-                """后台处理任务"""
+                """background processing task"""
                 nonlocal start_time
                 try:
                     # 获取或创建会话（返回是否为新会话）
