@@ -109,18 +109,20 @@ class ChatRequest(AgentConfigMixin):
 
     model_config = ConfigDict(
         json_schema_extra={
-            "message": "Hello, I need help with my order",
-            "customer_id": "cust_123xy",
-            "session_id": "68d510aedff9455e5b019b3e",  # Required for async chat
-            "tenant_id": "dev-test",
-            "chatbot_id": "68d510aedff9455e5b019b3e",
-            "md5_checksum": "1234567890",
-            "source": EventSourceDTO.BACK_UI,
-            "is_preview": False,
-            "preview_action_book_ids": [],
-            "autofill_params": {},
-            "session_title": "",
-            "timeout": 60,
+            "example": {
+                "message": "Hello, I need help with my order",
+                "customer_id": "100000",
+                "session_id": "100000",
+                "tenant_id": "6336b6724011d05a0edbbe1a",
+                "chatbot_id": "698314232b6a6c6eca434c01",
+                "md5_checksum": "1234567890",
+                "source": "customer",
+                "is_preview": False,
+                "preview_action_book_ids": [],
+                "autofill_params": {},
+                "session_title": "",
+                "timeout": 60,
+            }
         }
     )
 
