@@ -349,8 +349,11 @@ class MessageRepository(BaseRepository):
         )
 
         if self.is_persistent:
+            logger.info(f"MessageRepository.create: inserting to DB, session={session_id}, role={role}")
             await self._db.messages.insert_one(doc.to_dict())
+            logger.info(f"MessageRepository.create: inserted, message_id={mid}")
         else:
+            logger.info(f"MessageRepository.create: memory mode, session={session_id}, role={role}")
             self._memory_store[mid] = doc
             if session_id not in self._session_index:
                 self._session_index[session_id] = []
@@ -543,8 +546,11 @@ class UsageRepository(BaseRepository):
         )
 
         if self.is_persistent:
+            logger.info(f"UsageRepository.create: inserting to DB, session={session_id}, tokens={total_tokens}")
             await self._db.usages.insert_one(doc.to_dict())
+            logger.info(f"UsageRepository.create: inserted, usage_id={uid}")
         else:
+            logger.info(f"UsageRepository.create: memory mode, session={session_id}, tokens={total_tokens}")
             self._memory_store[uid] = doc
             self._correlation_index[correlation_id] = uid
 

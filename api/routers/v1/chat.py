@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 from api.core.correlation import get_correlation_id
 from api.core.logging import get_logger, LogContext
-from api.services.v2 import EventCollector
+from api.services.v2 import EventCollector, QueryRecorder
 from api.services.callback import (
     CallbackService,
     CallbackCode,
@@ -135,7 +135,7 @@ class ChatRequest(AgentConfigMixin):
             md5_checksum=self.md5_checksum,
             preview=self.is_preview,
             # action_book_id is a list of action book ids
-            action_book_id=self.preview_action_book_ids or [],
+            action_book_id=self.preview_action_book_ids or None,
             extra_param=self.autofill_params or None,
         )
 
@@ -244,6 +244,7 @@ def create_router() -> APIRouter:
 
         get_session_manager, get_repository_manager = get_deps()
         session_manager = get_session_manager()
+        repos = get_repository_manager()
         callback_service = get_callback_service()
 
         with LogContext(
@@ -320,6 +321,11 @@ def create_router() -> APIRouter:
                         f"duration={duration:.2f}s"
                     )
 
+                    # 后台记录 messages / usages（与 V2 保持一致）
+                    if repos:
+                        recorder = QueryRecorder(repos)
+                        recorder.record_async(collector, usage)
+
                 except asyncio.CancelledError:
                     duration = time.time() - start_time
                     await callback_service.send_cancelled(correlation_id, duration)
@@ -339,7 +345,6 @@ def create_router() -> APIRouter:
             task = asyncio.create_task(process_chat())
 
             # 注册任务（自动取消旧任务）
-            # todo save message
             cancelled_task = await _task_manager.register(
                 session_id=request.session_id,
                 correlation_id=correlation_id,

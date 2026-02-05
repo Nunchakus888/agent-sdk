@@ -60,34 +60,43 @@ class QueryRecorder:
             collector: 事件收集器
             usage: Token 使用统计
         """
+        logger.info(
+            f"QueryRecorder.record: session={collector.session_id}, "
+            f"correlation={collector.correlation_id}"
+        )
         try:
             await asyncio.gather(
                 self._record_messages(collector),
                 self._record_tool_calls(collector),
                 self._record_usage(collector, usage),
             )
+            logger.info(f"QueryRecorder.record completed: {collector.session_id}")
         except Exception as e:
-            logger.error(f"Failed to record query: {e}")
+            logger.error(f"Failed to record query: {e}", exc_info=True)
 
     async def _record_messages(self, collector: EventCollector) -> None:
         """记录消息 (V2: 简化字段)"""
         # 用户消息
         if collector.user_message:
+            logger.debug(f"Recording user message: {collector.session_id}")
             await self._repos.messages.create(
                 session_id=collector.session_id,
                 role="user",
                 content=collector.user_message,
                 correlation_id=collector.correlation_id,
             )
+            logger.debug(f"User message recorded: {collector.session_id}")
 
         # 助手消息
         if collector.final_response:
+            logger.debug(f"Recording assistant message: {collector.session_id}")
             await self._repos.messages.create(
                 session_id=collector.session_id,
                 role="assistant",
                 content=collector.final_response,
                 correlation_id=collector.correlation_id,
             )
+            logger.debug(f"Assistant message recorded: {collector.session_id}")
 
     async def _record_tool_calls(self, collector: EventCollector) -> None:
         """记录工具调用 (V2: 直接映射 ToolCallRecord)"""
@@ -111,7 +120,10 @@ class QueryRecorder:
     ) -> None:
         """记录 usage (V2: 单次写入，扁平结构)"""
         if not usage:
+            logger.debug(f"No usage to record: {collector.session_id}")
             return
+
+        logger.debug(f"Recording usage: {collector.session_id}, tokens={usage.total_tokens}")
 
         # 构建 by_model 字典
         by_model = {
@@ -133,6 +145,7 @@ class QueryRecorder:
             total_cost=usage.total_cost,
             by_model=by_model,
         )
+        logger.debug(f"Usage recorded: {collector.session_id}")
 
     def record_async(
         self,
