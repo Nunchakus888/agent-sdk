@@ -78,12 +78,7 @@ def create_router() -> APIRouter:
                 # - Session 存在且配置未变 → 直接返回
                 # - Session 不存在 → 从 DB/HTTP 加载配置 → 创建 Agent
                 # ─────────────────────────────────────────────────────────
-                ctx = await session_manager.get_or_create(
-                    session_id=request.session_id,
-                    tenant_id=request.tenant_id,
-                    chatbot_id=request.chatbot_id,
-                    config_hash=request.md5_checksum,
-                )
+                ctx = await session_manager.get_or_create(request.to_config_request())
 
                 # ─────────────────────────────────────────────────────────
                 # Phase 2: 核心执行（统一事件收集）

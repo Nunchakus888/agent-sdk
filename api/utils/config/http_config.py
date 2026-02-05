@@ -29,34 +29,33 @@ class AgentConfigError(HttpRequestError):
 
 @dataclass
 class AgentConfigRequest:
-    """Agent配置请求参数结构"""
+    """
+    Agent配置请求参数结构
+    
+    用于获取/创建会话和加载配置的统一参数对象
+    """
+    # 核心必填字段
+    session_id: str
     tenant_id: str
     chatbot_id: str
+    
+    # 可选配置字段
+    md5_checksum: Optional[str] = None
     preview: bool = False
     action_book_id: Optional[str] = None
     extra_param: Optional[Dict[str, Any]] = None
-    md5_checksum: Optional[str] = None
-    session_id: Optional[str] = None
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'AgentConfigRequest':
-        """
-        从字典创建AgentConfigRequest实例
-        
-        Args:
-            data: 包含请求参数的字典
-            
-        Returns:
-            AgentConfigRequest实例
-        """
+        """从字典创建 AgentConfigRequest 实例"""
         return cls(
+            session_id=data["sessionId"],
             tenant_id=data["tenantId"],
             chatbot_id=data["chatbotId"],
+            md5_checksum=data.get("md5Checksum"),
             preview=data.get("preview", False),
             action_book_id=data.get("actionBookId"),
             extra_param=data.get("extraParam"),
-            md5_checksum=data.get("md5Checksum"),
-            session_id=data.get("sessionId")
         )
 
 class AsyncHttpClient:
@@ -119,6 +118,7 @@ class AsyncHttpClient:
                         error_msg = data.get("message", f"HTTP {status}")
                         raise HttpRequestError(error_msg, status_code=status)
 
+                    self.logger.info(f"📥 Response: {json.dumps(data, indent=2, ensure_ascii=False)}")
                     return data
                     
         except aiohttp.ClientError as e:
@@ -168,6 +168,7 @@ class HttpConfigLoader:
             "preview": request.preview,
             "actionBookId": request.action_book_id,
             "extraParam": request.extra_param or {},
+            "sessionId": request.session_id,
         }
         
         try:

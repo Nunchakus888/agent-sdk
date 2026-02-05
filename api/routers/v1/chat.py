@@ -12,11 +12,14 @@ V1 Chat 异步回调 API
 
 import asyncio
 import time
-from typing import Any, Optional
+from typing import Any, Optional, TYPE_CHECKING
 from dataclasses import dataclass, field
 from enum import Enum
 from fastapi import APIRouter, status
 from pydantic import BaseModel, Field, ConfigDict, field_validator
+
+if TYPE_CHECKING:
+    from api.utils.config.http_config import AgentConfigRequest
 
 from api.core.correlation import get_correlation_id
 from api.core.logging import get_logger, LogContext
@@ -120,6 +123,21 @@ class ChatRequest(AgentConfigMixin):
             "timeout": 60,
         }
     )
+
+    def to_config_request(self) -> "AgentConfigRequest":
+        """转换为 AgentConfigRequest"""
+        from api.utils.config.http_config import AgentConfigRequest
+
+        return AgentConfigRequest(
+            session_id=self.session_id,
+            tenant_id=self.tenant_id,
+            chatbot_id=self.chatbot_id,
+            md5_checksum=self.md5_checksum,
+            preview=self.is_preview,
+            # action_book_id is a list of action book ids
+            action_book_id=self.preview_action_book_ids or [],
+            extra_param=self.autofill_params or None,
+        )
 
 
 class ChatAsyncResponse(BaseModel):
@@ -240,12 +258,7 @@ def create_router() -> APIRouter:
                     # 获取或创建会话（返回是否为新会话）
                     is_new_session = not session_manager.exists(request.session_id)
 
-                    ctx = await session_manager.get_or_create(
-                        session_id=request.session_id,
-                        tenant_id=request.tenant_id,
-                        chatbot_id=request.chatbot_id,
-                        config_hash=request.md5_checksum or "",
-                    )
+                    ctx = await session_manager.get_or_create(request.to_config_request())
 
                     # 新会话且配置了问候语，先发送问候消息
                     if is_new_session and ctx.agent.config.need_greeting:

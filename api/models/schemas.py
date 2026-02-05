@@ -4,8 +4,11 @@ API 请求/响应模型
 定义 FastAPI 的 Pydantic 模型（请求和响应）
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, TYPE_CHECKING
 from pydantic import BaseModel, ConfigDict, Field
+
+if TYPE_CHECKING:
+    from api.utils.config.http_config import AgentConfigRequest
 
 
 class QueryRequest(BaseModel):
@@ -41,6 +44,19 @@ class QueryRequest(BaseModel):
             }
         }
     )
+
+    def to_config_request(self) -> "AgentConfigRequest":
+        """转换为 AgentConfigRequest"""
+        from api.utils.config.http_config import AgentConfigRequest
+
+        return AgentConfigRequest(
+            session_id=self.session_id,
+            tenant_id=self.tenant_id,
+            chatbot_id=self.chatbot_id,
+            md5_checksum=self.md5_checksum,
+            preview=self.is_preview,
+            extra_param=self.autofill_params or None,
+        )
 
 
 class QueryResponse(BaseModel):

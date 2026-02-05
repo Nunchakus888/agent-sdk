@@ -27,6 +27,7 @@ from api.services.llm_service import LLMService
 
 if TYPE_CHECKING:
     from api.services.database import Database
+    from api.utils.config.http_config import AgentConfigRequest
 
 logger = logging.getLogger(__name__)
 
@@ -49,16 +50,19 @@ class SessionManager:
 
     Usage:
         ```python
+        from api.utils.config.http_config import AgentConfigRequest
+
         session_mgr = SessionManager(repos=repos, llm_provider=llm_provider)
         await session_mgr.start()
 
         # 获取或创建会话（内部处理配置加载）
-        ctx = await session_mgr.get_or_create(
+        request = AgentConfigRequest(
             session_id="sess_123",
             tenant_id="tenant_1",
             chatbot_id="bot_1",
-            config_hash="abc123",
+            md5_checksum="abc123",
         )
+        ctx = await session_mgr.get_or_create(request)
 
         # 执行查询
         result = await ctx.agent.query(message, session_id)
@@ -156,19 +160,13 @@ class SessionManager:
 
     async def get_or_create(
         self,
-        session_id: str,
-        tenant_id: str,
-        chatbot_id: str,
-        config_hash: str,
+        request: "AgentConfigRequest",
     ) -> SessionContext:
         """
         获取或创建会话上下文
 
         Args:
-            session_id: 会话 ID
-            tenant_id: 租户 ID
-            chatbot_id: Chatbot ID
-            config_hash: 配置哈希（用于检测配置更新）
+            request: Agent 配置请求参数（包含 session_id, tenant_id, chatbot_id 等）
 
         Returns:
             SessionContext 实例
@@ -178,6 +176,9 @@ class SessionManager:
         - Session 存在但配置变了 → 销毁旧 session → 创建新 session
         - Session 不存在 → 从 DB/HTTP 加载配置 → 创建 Agent → 创建 Session
         """
+        session_id = request.session_id
+        config_hash = request.md5_checksum or ""
+
         # 1. 检查现有会话（快速路径）
         if session_id in self._sessions:
             ctx = self._sessions[session_id]
@@ -194,7 +195,7 @@ class SessionManager:
             await self._evict_oldest()
 
         # 3. 加载配置
-        config = await self._load_config(config_hash, tenant_id, chatbot_id)
+        config = await self._load_config(request)
 
         # 4. 并行执行：Agent 创建 + DB 操作
         agent_task = self._create_agent(config)
@@ -202,7 +203,9 @@ class SessionManager:
         if self._repos:
             agent = await agent_task
             await asyncio.gather(
-                self._ensure_session_record(session_id, tenant_id, chatbot_id),
+                self._ensure_session_record(
+                    session_id, request.tenant_id, request.chatbot_id
+                ),
                 self._load_history(agent, session_id),
                 return_exceptions=True,
             )
@@ -212,8 +215,8 @@ class SessionManager:
         # 5. 创建会话上下文
         ctx = SessionContext(
             session_id=session_id,
-            tenant_id=tenant_id,
-            chatbot_id=chatbot_id,
+            tenant_id=request.tenant_id,
+            chatbot_id=request.chatbot_id,
             agent=agent,
             config_hash=config_hash,
         )
@@ -228,9 +231,7 @@ class SessionManager:
 
     async def _load_config(
         self,
-        config_hash: str,
-        tenant_id: str,
-        chatbot_id: str,
+        request: "AgentConfigRequest",
     ) -> WorkflowConfigSchema:
         """
         加载配置（DB → HTTP）
@@ -238,45 +239,41 @@ class SessionManager:
         流程：
         1. DB 命中且 hash 匹配 → 直接返回（access_count 自动 +1）
         2. DB 未命中或 hash 不匹配 → HTTP 加载 → 解析 → 存储 DB → 返回
-
-        设计原则：
-        - 按 chatbot_id 索引，每个 chatbot 一条记录
-        - config_hash 用于缓存失效检测
-        - 访问统计自动递增
         """
+        config_hash = request.md5_checksum or ""
+
         # 从 DB 加载（自动递增 access_count）
         if self._repos:
-            doc = await self._repos.configs.get(chatbot_id, tenant_id, expected_hash=config_hash)
+            doc = await self._repos.configs.get(
+                request.chatbot_id, request.tenant_id, expected_hash=config_hash
+            )
             if doc:
-                logger.debug(f"Config DB HIT: {chatbot_id}, hash={config_hash[:12]}")
+                logger.debug(f"Config DB HIT: {request.chatbot_id}, hash={config_hash[:12]}")
                 return WorkflowConfigSchema(**doc.parsed_config)
 
         # DB 未命中或 hash 不匹配，从 HTTP 加载
-        logger.info(f"Config DB MISS: chatbot={chatbot_id}, hash={config_hash[:12]}")
-        return await self._load_config_from_http(config_hash, tenant_id, chatbot_id)
+        logger.info(f"Config DB MISS: chatbot={request.chatbot_id}, hash={config_hash[:12]}")
+        return await self._load_config_from_http(request)
 
     async def _load_config_from_http(
         self,
-        config_hash: str,
-        tenant_id: str,
-        chatbot_id: str,
+        request: "AgentConfigRequest",
     ) -> WorkflowConfigSchema:
         """从 HTTP 加载配置并存储到 DB"""
-        from api.utils.config.http_config import HttpConfigLoader, AgentConfigRequest
+        from api.utils.config.http_config import HttpConfigLoader
 
         if self._http_loader is None:
             self._http_loader = HttpConfigLoader(logger)
 
-        raw_config = await self._http_loader.load_config_from_http(
-            AgentConfigRequest(tenant_id=tenant_id, chatbot_id=chatbot_id)
-        )
+        raw_config = await self._http_loader.load_config_from_http(request)
 
+        config_hash = request.md5_checksum or ""
         config = await self._parse_config(raw_config, config_hash)
 
         # 存储到 DB（解耦的独立操作）
         await self._save_config_to_db(
-            tenant_id=tenant_id,
-            chatbot_id=chatbot_id,
+            tenant_id=request.tenant_id,
+            chatbot_id=request.chatbot_id,
             config_hash=config_hash,
             raw_config=raw_config,
             parsed_config=config.model_dump(),

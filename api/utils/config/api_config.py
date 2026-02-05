@@ -13,7 +13,7 @@ class API:
     """API 路径配置"""
     
     # Chatbot 相关
-    GET_AGENT_CONFIG = "/chatbot/ai-inner/get-agent-config"
+    GET_AGENT_CONFIG = "/chatbot/ai-inner/get-ai-agent-config"
     RETRIEVE_KNOWLEDGE = "/chatbot/ai-inner/retrieve-knowledge"
     
     # 回调相关
