@@ -1,18 +1,18 @@
-# Docker Compose 配置示例
-version: '3.8'
-
+# Docker Compose 配置
 services:
   # Workflow Agent 应用
   workflow-agent:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     ports:
       - "8000:8000"
     environment:
       # LLM配置
       OPENAI_API_KEY: ${OPENAI_API_KEY}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
-      DEFAULT_MODEL: gpt-4o
+      DEFAULT_MODEL: ${DEFAULT_MODEL:-gpt-4o}
 
       # 任务特定模型配置（可选）
       INTENT_MATCHING_MODEL: ${INTENT_MATCHING_MODEL:-gpt-4o-mini}
@@ -27,59 +27,59 @@ services:
       REDIS_URL: redis://redis:6379
 
       # 应用配置
-      ENVIRONMENT: production
-      LOG_LEVEL: INFO
-      MAX_ITERATIONS: 5
-      ITERATION_STRATEGY: sop_driven
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      MAX_ITERATIONS: ${MAX_ITERATIONS:-5}
+      ITERATION_STRATEGY: ${ITERATION_STRATEGY:-sop_driven}
 
-    depends_on:
-      - mongodb
-      - redis
+    # depends_on:
+    #   mongodb:
+    #     condition: service_healthy
     volumes:
-      - ./config:/app/config
+      - ./config:/app/config:ro
     networks:
       - workflow-network
+    restart: unless-stopped
 
   # MongoDB
-  mongodb:
-    image: mongo:7
-    ports:
-      - "27017:27017"
-    volumes:
-      - mongodb_data:/data/db
-    environment:
-      MONGO_INITDB_DATABASE: workflow_agent
-    networks:
-      - workflow-network
+  # mongodb:
+  #   image: mongo:7
+  #   ports:
+  #     - "27017:27017"
+  #   volumes:
+  #     - mongodb_data:/data/db
+  #   environment:
+  #     MONGO_INITDB_DATABASE: workflow_agent
+  #   networks:
+  #     - workflow-network
+  #   healthcheck:
+  #     test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+  #     start_period: 10s
+  #   restart: unless-stopped
 
   # Redis
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    networks:
-      - workflow-network
+  # redis:
+  #   image: redis:7-alpine
+  #   ports:
+  #     - "6379:6379"
+  #   volumes:
+  #     - redis_data:/data
+  #   networks:
+  #     - workflow-network
+  #   healthcheck:
+  #     test: ["CMD", "redis-cli", "ping"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+  #     start_period: 5s
+  #   restart: unless-stopped
 
-  # PostgreSQL (可选)
-  postgres:
-    image: postgres:16-alpine
-    ports:
-      - "5432:5432"
-    environment:
-      POSTGRES_DB: workflow_agent
-      POSTGRES_USER: workflow
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    networks:
-      - workflow-network
-
-volumes:
-  mongodb_data:
-  redis_data:
-  postgres_data:
+# volumes:
+  # mongodb_data:
+  # redis_data:
 
 networks:
   workflow-network:

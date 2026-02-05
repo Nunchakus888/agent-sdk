@@ -1,31 +1,52 @@
-FROM python:3.11-slim
+# =============================================================================
+# Stage 1: Build Chat UI
+# =============================================================================
+FROM node:20-alpine AS chat-builder
+
+WORKDIR /app/chat
+
+# Copy chat UI source
+COPY api/chat/package*.json ./
+RUN npm ci --registry=https://registry.npmmirror.com
+
+COPY api/chat/ ./
+RUN npm run build
+
+
+# =============================================================================
+# Stage 2: Python Application
+# =============================================================================
+FROM python:3.13-slim AS runtime
 
 WORKDIR /app
 
-# Install system dependencies and uv
-RUN apt-get update && apt-get install -y \
-    gcc \
-    curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && curl -LsSf https://astral.sh/uv/install.sh | sh
+# Install uv via pip (避免 apt-get 网络问题)
+RUN pip install --no-cache-dir uv
 
-# Add uv to PATH
-ENV PATH="/root/.cargo/bin:$PATH"
+# Copy dependency files
+COPY pyproject.toml uv.lock README.md ./
 
-# Copy project files
-COPY pyproject.toml .
-COPY README.md .
-COPY . .
+# Install Python dependencies
+RUN uv sync --frozen --no-dev --extra api
 
-# Install dependencies using uv (much faster than pip)
-RUN uv pip install --system -e ".[api]"
+# Copy application code
+COPY bu_agent_sdk/ ./bu_agent_sdk/
+COPY api/ ./api/
 
-# Expose port
+# Copy built chat UI from builder stage
+COPY --from=chat-builder /app/chat/dist ./api/chat/dist/
+
+# Environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    HOST=0.0.0.0 \
+    PORT=8000
+
 EXPOSE 8000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD python -c "import httpx; httpx.get('http://localhost:8000/api/v1/health', timeout=5)"
+# Health check (使用 Python 代替 curl)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health', timeout=5)"
 
-# Run application
-CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run the application
+CMD ["uv", "run", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

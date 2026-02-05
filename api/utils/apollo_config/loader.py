@@ -214,7 +214,7 @@ async def load_config_from_env(apply_env: bool = True) -> Optional[Dict[str, Any
     Example:
         # 先设置环境变量
         os.environ["APOLLO_CONFIG_SERVER_URL"] = "http://apollo.example.com:8080"
-        os.environ["APOLLO_APP_ID"] = "my-app"
+        os.environ["APOLLO_APP_ID"] = "omni-agent"
 
         # 然后加载
         config = await load_config_from_env()
@@ -224,9 +224,8 @@ async def load_config_from_env(apply_env: bool = True) -> Optional[Dict[str, Any
 
     # 未配置则跳过
     if not server_url or not app_id:
-        raise ApolloConfigError(
-            "Missing required env: APOLLO_CONFIG_SERVER_URL, APOLLO_APP_ID"
-        )
+        logger.info("Apollo config: skipped (APOLLO_CONFIG_SERVER_URL/APOLLO_APP_ID not set)")
+        return None
 
     try:
         config = await load_config(

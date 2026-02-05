@@ -166,7 +166,7 @@ def create_router() -> APIRouter:
     )
     async def chat_async(request: ChatRequest):
         start_time = time.time()
-        correlation_id = f"{get_correlation_id()}::process"
+        correlation_id = get_correlation_id()
 
         get_session_manager, get_repository_manager = get_deps()
         session_manager = get_session_manager()

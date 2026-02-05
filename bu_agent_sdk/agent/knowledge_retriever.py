@@ -14,7 +14,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from config.http_config import AsyncHttpClient, HttpRequestError
+from api.utils.config.http_config import AsyncHttpClient, HttpRequestError
 
 logger = logging.getLogger("agent_sdk.knowledge_retriever")
 

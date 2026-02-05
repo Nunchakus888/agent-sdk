@@ -262,7 +262,7 @@ class SessionManager:
         chatbot_id: str,
     ) -> WorkflowConfigSchema:
         """从 HTTP 加载配置并存储到 DB"""
-        from config.http_config import HttpConfigLoader, AgentConfigRequest
+        from api.utils.config.http_config import HttpConfigLoader, AgentConfigRequest
 
         if self._http_loader is None:
             self._http_loader = HttpConfigLoader(logger)

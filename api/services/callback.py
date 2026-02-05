@@ -148,7 +148,7 @@ class CallbackService:
             data=CallbackData(
                 source="ai_agent",
                 kind=kind,
-                creation_utc=datetime.now(timezone.utc),
+                creation_utc=datetime.now(timezone.utc).isoformat(),
                 correlation_id=correlation_id,
                 total_tokens=total_tokens,
                 session_id=session_id,
@@ -181,7 +181,7 @@ class CallbackService:
             data=CallbackData(
                 source="ai_agent",
                 kind="greeting",
-                creation_utc=datetime.now(timezone.utc),
+                creation_utc=datetime.now(timezone.utc).isoformat(),
                 correlation_id=correlation_id,
                 total_tokens=0,
                 session_id=session_id,
