@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Chat Test</title>
+    <style>
+        body { 
+            font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"; 
+            margin: 24px; 
+            color: #1f2937; 
+            background-color: #f9fafb;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .card { 
+            background: white;
+            padding: 24px; 
+            border: 1px solid #e5e7eb; 
+            border-radius: 12px; 
+            box-shadow: 0 2px 8px rgba(0,0,0,0.04); 
+            margin-bottom: 24px;
+        }
+        .form-group { 
+            display: flex; 
+            gap: 12px; 
+            align-items: center; 
+            margin-bottom: 16px; 
+        }
+        label { 
+            width: 140px; 
+            color: #6b7280; 
+            font-weight: 600; 
+            flex-shrink: 0;
+        }
+        input[type="text"], input[type="number"], textarea, select { 
+            flex: 1; 
+            padding: 10px 12px; 
+            border: 1px solid #d1d5db; 
+            border-radius: 8px; 
+            font-size: 14px; 
+            transition: border-color 0.2s;
+        }
+        input[type="text"]:focus, input[type="number"]:focus, textarea:focus, select:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+        select {
+            cursor: pointer;
+            background-color: white;
+        }
+        input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            margin: 0;
+            cursor: pointer;
+        }
+        textarea { 
+            min-height: 100px; 
+            resize: vertical; 
+            font-family: inherit;
+        }
+        .button-group {
+            display: flex;
+            gap: 12px;
+            justify-content: flex-end;
+            margin-top: 24px;
+        }
+        button { 
+            padding: 10px 20px; 
+            border: none; 
+            border-radius: 8px; 
+            font-weight: 600; 
+            cursor: pointer; 
+            transition: all 0.2s;
+            font-size: 14px;
+        }
+        .btn-primary { 
+            background: #3b82f6; 
+            color: white; 
+        }
+        .btn-primary:hover { 
+            background: #2563eb; 
+        }
+        .btn-secondary { 
+            background: #f3f4f6; 
+            color: #374151; 
+            border: 1px solid #d1d5db;
+        }
+        .btn-secondary:hover { 
+            background: #e5e7eb; 
+        }
+        .btn-primary:disabled {
+            background: #9ca3af;
+            cursor: not-allowed;
+        }
+        .response-section {
+            margin-top: 24px;
+            padding: 16px;
+            background: #f8fafc;
+            border-radius: 8px;
+            border-left: 4px solid #3b82f6;
+        }
+        .response-title {
+            font-weight: 600;
+            color: #1f2937;
+            margin-bottom: 8px;
+        }
+        .response-content {
+            color: #4b5563;
+            white-space: pre-wrap;
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+        .error {
+            background: #fef2f2;
+            border-left-color: #ef4444;
+            color: #dc2626;
+        }
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+            color: #6b7280;
+        }
+        .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid #e5e7eb;
+            border-radius: 50%;
+            border-top-color: #3b82f6;
+            animation: spin 1s ease-in-out infinite;
+            margin-right: 8px;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .help-text {
+            font-size: 12px;
+            color: #9ca3af;
+            margin-top: 4px;
+        }
+        .required {
+            color: #ef4444;
+        }
+        .section-divider {
+            border-top: 1px solid #e5e7eb;
+            margin: 24px 0;
+        }
+        .form-group.checkbox-group {
+            align-items: flex-start;
+        }
+        .form-group.checkbox-group label {
+            margin-left: 8px;
+            width: auto;
+            flex: 1;
+        }
+        .response-highlight {
+            background: #f0f9ff;
+            border: 1px solid #0ea5e9;
+            border-radius: 6px;
+            padding: 12px;
+            margin-bottom: 12px;
+            font-family: inherit;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        .response-highlight.error {
+            background: #fef2f2;
+            border-color: #ef4444;
+            color: #dc2626;
+        }
+        .response-highlight .label {
+            font-weight: 600;
+            color: #374151;
+            margin-bottom: 4px;
+        }
+        .response-highlight .value {
+            color: #1f2937;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <h1 style="margin: 0 0 24px 0; color: #1f2937; font-size: 24px;">Parlant Chat Test</h1>
+            
+            <form id="chatForm">
+                <!-- Required Fields Section -->
+                <h3 style="margin: 0 0 16px 0; color: #374151; font-size: 16px; font-weight: 600;">Required Fields</h3>
+                
+                <div class="form-group">
+                    <label for="message">Message <span class="required">*</span></label>
+                    <textarea id="message" name="message" placeholder="Enter your message here..." required></textarea>
+                    <div class="help-text">The message to send to the AI agent</div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="tenant_id">Tenant ID <span class="required">*</span></label>
+                    <input type="text" id="tenant_id" name="tenant_id" placeholder="Enter tenant ID" required>
+                    <div class="help-text">Unique identifier for the tenant</div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="chatbot_id">Chatbot ID <span class="required">*</span></label>
+                    <input type="text" id="chatbot_id" name="chatbot_id" placeholder="Enter chatbot ID" required>
+                    <div class="help-text">Unique identifier for the chatbot</div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="customer_id">Customer ID<span class="required">*</span></label>
+                    <input type="text" id="customer_id" name="customer_id" value="test_user">
+                    <div class="help-text">Unique identifier for the customer (auto-created if not provided)</div>
+                </div>
+
+                <!-- Optional Fields Section -->
+                <h3 style="margin: 24px 0 16px 0; color: #374151; font-size: 16px; font-weight: 600;">Optional Fields</h3>
+                
+                
+                <div class="form-group">
+                    <label for="session_id">Session ID</label>
+                    <input type="text" id="session_id" name="session_id" placeholder="Leave empty for new session">
+                    <div class="help-text">Continue existing session (new session created if not provided)</div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="session_title">Session Title</label>
+                    <input type="text" id="session_title" name="session_title" placeholder="Chat Session">
+                    <div class="help-text">Title for new sessions (defaults to 'Chat Session')</div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="timeout">Timeout (seconds)</label>
+                    <input type="number" id="timeout" name="timeout" value="60" min="5" max="300">
+                    <div class="help-text">Maximum wait time for AI response (default: 60 seconds)</div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="api_endpoint">API Endpoint</label>
+                    <select id="api_endpoint" name="api_endpoint">
+                        <option value="/sessions/chat">sessions/chat (Sync - Legacy)</option>
+                        <option value="/sessions/chat_async" selected>sessions/chat_async (Async - New)</option>
+                    </select>
+                    <div class="help-text">Choose between legacy sync API or new async API</div>
+                </div>
+                
+                <!-- Advanced Options Section -->
+                <h3 style="margin: 24px 0 16px 0; color: #374151; font-size: 16px; font-weight: 600;">Advanced Options</h3>
+                
+                <div class="form-group">
+                    <label for="autofill_params">Autofill Parameters</label>
+                    <textarea id="autofill_params" name="autofill_params" placeholder='{"dialogId": "123", "tenantId": "1bgrs2d1sxef47d23a91x4s6z7y9gt8"}'></textarea>
+                    <div class="help-text">JSON object for auto-filling data-connector parameters</div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="preview_actionbook_ids">Preview Actionbook IDs</label>
+                    <input type="text" id="preview_actionbook_ids" name="preview_actionbook_ids" placeholder="act_123xyz,act_456xyz">
+                    <div class="help-text">Comma-separated list of actionbook IDs to preview</div>
+                </div>
+                
+                <div class="form-group checkbox-group">
+                    <input type="checkbox" id="is_preview" name="is_preview" value="true">
+                    <label for="is_preview">Is Preview</label>
+                    <div class="help-text">Whether to preview the actionbooks</div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="md5_checksum">MD5 Checksum</label>
+                    <input type="text" id="md5_checksum" name="md5_checksum" placeholder="1234567890">
+                    <div class="help-text">MD5 checksum of agent configs (triggers reload if changed)</div>
+                </div>
+                
+                <div class="button-group">
+                    <button type="button" class="btn-secondary" onclick="clearForm()">Clear</button>
+                    <button type="submit" class="btn-primary" id="submitBtn">Send Message</button>
+                </div>
+            </form>
+            
+            <div class="loading" id="loading">
+                <div class="spinner"></div>
+                Sending message...
+            </div>
+            
+            <div id="response" style="display: none;"></div>
+        </div>
+    </div>
+
+    <script>
+        const form = document.getElementById('chatForm');
+        const loading = document.getElementById('loading');
+        const response = document.getElementById('response');
+        const submitBtn = document.getElementById('submitBtn');
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const formData = new FormData(form);
+            const apiEndpoint = formData.get('api_endpoint') || '/sessions/chat_async';
+            const data = {
+                message: formData.get('message'),
+                tenant_id: formData.get('tenant_id'),
+                chatbot_id: formData.get('chatbot_id'),
+                customer_id: formData.get('customer_id') || null,
+                session_id: formData.get('session_id') || null,
+                session_title: formData.get('session_title') || null,
+                timeout: parseInt(formData.get('timeout')) || 60,
+                autofill_params: {},
+                preview_actionbook_ids: [],
+                is_preview: false,
+                md5_checksum: formData.get('md5_checksum') || null
+            };
+
+            // Handle autofill_params JSON parsing
+            const autofillParamsText = formData.get('autofill_params');
+            if (autofillParamsText && autofillParamsText.trim()) {
+                try {
+                    data.autofill_params = JSON.parse(autofillParamsText);
+                } catch (error) {
+                    showResponse({
+                        error: 'Invalid JSON',
+                        message: 'Autofill Parameters must be valid JSON',
+                        details: error.message
+                    }, true);
+                    return;
+                }
+            }
+
+            // Handle preview_actionbook_ids
+            const previewActionbookIdsText = formData.get('preview_actionbook_ids');
+            if (previewActionbookIdsText && previewActionbookIdsText.trim()) {
+                data.preview_actionbook_ids = previewActionbookIdsText
+                    .split(',')
+                    .map(id => id.trim())
+                    .filter(id => id.length > 0);
+            }
+
+            // Handle is_preview checkbox
+            data.is_preview = formData.get('is_preview') === 'true';
+
+            // Remove null/empty values
+            Object.keys(data).forEach(key => {
+                if (data[key] === null || data[key] === '' || 
+                    (Array.isArray(data[key]) && data[key].length === 0) ||
+                    (typeof data[key] === 'object' && Object.keys(data[key]).length === 0)) {
+                    delete data[key];
+                }
+            });
+
+            try {
+                showLoading(true);
+                hideResponse();
+
+                const response_data = await fetch(apiEndpoint, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(data)
+                });
+
+                const result = await response_data.json();
+
+                // Handle new RESTful response format
+                if (result.code === 0) {
+                    // Success response
+                    showResponse(result, false);
+                } else {
+                    // Error response (even with HTTP 200, check business code)
+                    showResponse(result, true);
+                }
+            } catch (error) {
+                showResponse({
+                    error: 'Network Error',
+                    message: error.message,
+                    details: error.toString()
+                }, true);
+            } finally {
+                showLoading(false);
+            }
+        });
+
+        function showLoading(show) {
+            loading.style.display = show ? 'block' : 'none';
+            // submitBtn.disabled = show;
+        }
+
+        function showResponse(data, isError) {
+            response.style.display = 'block';
+            response.className = isError ? 'response-section error' : 'response-section';
+            
+            let title, highlightContent, fullContent;
+            
+            if (isError) {
+                title = 'Error Response';
+                // Format error response with business code and message
+                if (data.code !== undefined) {
+                    highlightContent = `
+                        <div class="response-highlight error">
+                            <div class="label">Business Code:</div>
+                            <div class="value">${data.code}</div>
+                            <div class="label" style="margin-top: 8px;">Message:</div>
+                            <div class="value">${data.message}</div>
+                        </div>
+                    `;
+                } else {
+                    highlightContent = '';
+                }
+                fullContent = JSON.stringify(data, null, 2);
+            } else {
+                title = 'AI Response';
+                // Extract and highlight the AI message for better readability
+                if (data.data && data.data.data && data.data.data.message) {
+                    const aiMessage = data.data.data.message;
+                    const participant = data.data.data.participant?.display_name || 'AI Assistant';
+                    highlightContent = `
+                        <div class="response-highlight">
+                            <div class="label">From:</div>
+                            <div class="value">${participant}</div>
+                            <div class="label" style="margin-top: 8px;">Message:</div>
+                            <div class="value">${aiMessage}</div>
+                        </div>
+                    `;
+                } else {
+                    highlightContent = '';
+                }
+                fullContent = JSON.stringify(data, null, 2);
+            }
+            
+            response.innerHTML = `
+                <div class="response-title">${title}</div>
+                ${highlightContent}
+                <div class="response-content">${fullContent}</div>
+            `;
+        }
+
+        function hideResponse() {
+            response.style.display = 'none';
+        }
+
+        function clearForm() {
+            form.reset();
+            hideResponse();
+            // Set default values
+            document.getElementById('customer_id').value = 'test_user';
+            document.getElementById('timeout').value = '60';
+            document.getElementById('api_endpoint').value = '/v1/query';
+            document.getElementById('tenant_id').value = '';
+            document.getElementById('chatbot_id').value = '';
+            document.getElementById('message').value = '';
+            document.getElementById('session_id').value = '';
+            document.getElementById('session_title').value = '';
+            document.getElementById('autofill_params').value = '';
+            document.getElementById('preview_actionbook_ids').value = '';
+            document.getElementById('is_preview').checked = false;
+            document.getElementById('md5_checksum').value = '';
+        }
+
+        // Auto-focus on message field
+        document.getElementById('message').focus();
+        
+        // Add JSON formatting for autofill_params
+        document.getElementById('autofill_params').addEventListener('blur', function() {
+            const value = this.value.trim();
+            if (value) {
+                try {
+                    const parsed = JSON.parse(value);
+                    this.value = JSON.stringify(parsed, null, 2);
+                } catch (error) {
+                    // Keep original value if not valid JSON
+                }
+            }
+        });
+    </script>
+</body>
+</html>

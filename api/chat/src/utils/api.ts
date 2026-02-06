@@ -6,8 +6,8 @@ export const BASE_URL = import.meta.env.VITE_BASE_URL || '';
  */
 const API_PATH_MAP: Record<string, string> = {
 	'sessions': 'v1/session',
-	'sessions/chat_async': 'v1/query',  // chat_async 在 query router 下
-	'sessions/query': 'v1/query',  // query 在 query router 下
+	'sessions/chat_async': 'v1/chat',  // chat_async maps to v1/chat endpoint
+	'sessions/query': 'v1/chat',  // query also maps to v1/chat endpoint
 	'agents': 'v1/agent',
 };
 

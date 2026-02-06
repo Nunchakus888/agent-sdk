@@ -19,6 +19,9 @@ from api.core import setup_logging, get_logger, setup_middlewares, setup_excepti
 from api.routers import health
 from api.routers.v2 import query as query_v2
 from api.routers.v1 import chat as chat_v1
+from api.routers.v1 import session as session_v1
+from api.routers.v1 import agent as agent_v1
+from api.routers.v1 import config as config_v1
 from api.container import AppContext
 
 # 初始化日志
@@ -127,6 +130,24 @@ def create_api_app(
         chat_v1.create_router(),
         prefix="/api/v1",
         tags=["Chat"],
+    )
+    # V1 Session
+    fastapi_app.include_router(
+        session_v1.create_router(),
+        prefix="/api/v1",
+        tags=["Session"],
+    )
+    # V1 Agent
+    fastapi_app.include_router(
+        agent_v1.create_router(),
+        prefix="/api/v1",
+        tags=["Agent"],
+    )
+    # V1 Config
+    fastapi_app.include_router(
+        config_v1.create_router(),
+        prefix="/api/v1",
+        tags=["Config"],
     )
     fastapi_app.include_router(
         query_v2.create_router(),

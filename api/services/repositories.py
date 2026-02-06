@@ -149,6 +149,47 @@ class ConfigRepository(BaseRepository):
             return result.deleted_count > 0
         return self._memory_store.pop(chatbot_id, None) is not None
 
+    async def list_all(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> List["ConfigDocumentV2"]:
+        """列出所有配置缓存"""
+        from api.models import ConfigDocumentV2
+
+        if self.is_persistent:
+            cursor = (
+                self._db.configs
+                .find()
+                .sort("updated_at", -1)
+                .skip(offset)
+                .limit(limit)
+            )
+            docs = await cursor.to_list(length=limit)
+            return [ConfigDocumentV2.from_dict(doc) for doc in docs]
+        else:
+            configs = sorted(
+                self._memory_store.values(),
+                key=lambda x: x.updated_at,
+                reverse=True,
+            )
+            return configs[offset:offset + limit]
+
+    async def count(self) -> int:
+        """统计配置缓存数"""
+        if self.is_persistent:
+            return await self._db.configs.count_documents({})
+        return len(self._memory_store)
+
+    async def get_by_chatbot_id(self, chatbot_id: str) -> Optional["ConfigDocumentV2"]:
+        """按 chatbot_id 获取配置（不校验 tenant_id 和 hash）"""
+        from api.models import ConfigDocumentV2
+
+        if self.is_persistent:
+            doc = await self._db.configs.find_one({"_id": chatbot_id})
+            return ConfigDocumentV2.from_dict(doc) if doc else None
+        return self._memory_store.get(chatbot_id)
+
 
 # =============================================================================
 # Session Repository (V2)
@@ -275,6 +316,34 @@ class SessionRepository(BaseRepository):
                 return session.event_count
             return 0
 
+    async def count(
+        self,
+        tenant_id: Optional[str] = None,
+        chatbot_id: Optional[str] = None,
+    ) -> int:
+        """统计会话数"""
+        if self.is_persistent:
+            query = {}
+            if tenant_id:
+                query["tenant_id"] = tenant_id
+            if chatbot_id:
+                query["chatbot_id"] = chatbot_id
+            return await self._db.sessions.count_documents(query)
+        else:
+            sessions = list(self._memory_store.values())
+            if tenant_id:
+                sessions = [s for s in sessions if s.tenant_id == tenant_id]
+            if chatbot_id:
+                sessions = [s for s in sessions if s.chatbot_id == chatbot_id]
+            return len(sessions)
+
+    async def delete(self, session_id: str) -> bool:
+        """删除会话"""
+        if self.is_persistent:
+            result = await self._db.sessions.delete_one({"_id": session_id})
+            return result.deleted_count > 0
+        return self._memory_store.pop(session_id, None) is not None
+
     async def list_by_tenant(
         self,
         tenant_id: str,
@@ -393,6 +462,34 @@ class MessageRepository(BaseRepository):
         if self.is_persistent:
             return await self._db.messages.count_documents({"session_id": session_id})
         return len(self._session_index.get(session_id, []))
+
+    async def delete_from_offset(self, session_id: str, min_offset: int) -> int:
+        """删除会话中指定 offset 之后的消息（按 created_at 排序的索引位置）"""
+        if self.is_persistent:
+            # 获取该会话所有消息，按 created_at 排序
+            cursor = (
+                self._db.messages
+                .find({"session_id": session_id})
+                .sort("created_at", 1)
+                .skip(min_offset)
+            )
+            docs = await cursor.to_list(length=1000)
+            if not docs:
+                return 0
+            ids = [doc["_id"] for doc in docs]
+            result = await self._db.messages.delete_many({"_id": {"$in": ids}})
+            return result.deleted_count
+        else:
+            ids = self._session_index.get(session_id, [])
+            msgs = [self._memory_store[mid] for mid in ids if mid in self._memory_store]
+            msgs.sort(key=lambda x: x.created_at)
+            to_delete = msgs[min_offset:]
+            for msg in to_delete:
+                self._memory_store.pop(msg.message_id, None)
+            self._session_index[session_id] = [
+                mid for mid in ids if mid in self._memory_store
+            ]
+            return len(to_delete)
 
 
 # =============================================================================

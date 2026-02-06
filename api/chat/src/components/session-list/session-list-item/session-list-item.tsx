@@ -2,7 +2,7 @@ import {Dispatch, ReactElement, SetStateAction, useEffect, useRef, useState} fro
 import {Input} from '../../ui/input';
 import Tooltip from '../../ui/custom/tooltip';
 import {Button} from '../../ui/button';
-import {BASE_URL, deleteData, patchData} from '@/utils/api';
+import {deleteData, getData, patchData} from '@/utils/api';
 import {toast} from 'sonner';
 import {EventInterface, SessionCsvInterface, SessionInterface, EVENT_SOURCE} from '@/utils/interfaces';
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger} from '../../ui/dropdown-menu';
@@ -159,9 +159,7 @@ export default function SessionListItem({session, isSelected, refetch, editingTi
 
 	const fetchSessionData = async (sessionId: string) => {
 		try {
-			const response = await fetch(`${BASE_URL}/sessions/${sessionId}/events`);
-			if (!response.ok) throw new Error('Failed to fetch session data');
-			return await response.json();
+			return await getData(`sessions/${sessionId}/events`);
 		} catch (error) {
 			console.error('Failed to fetch session data:', error);
 			return {messages: []};
