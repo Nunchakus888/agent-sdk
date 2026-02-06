@@ -60,7 +60,7 @@ class QueryRecorder:
             collector: 事件收集器
             usage: Token 使用统计
         """
-        logger.info(
+        logger.debug(
             f"QueryRecorder.record: session={collector.session_id}, "
             f"correlation={collector.correlation_id}"
         )
@@ -70,7 +70,7 @@ class QueryRecorder:
                 self._record_tool_calls(collector),
                 self._record_usage(collector, usage),
             )
-            logger.info(f"QueryRecorder.record completed: {collector.session_id}")
+            logger.debug(f"QueryRecorder.record completed: {collector.session_id}")
         except Exception as e:
             logger.error(f"Failed to record query: {e}", exc_info=True)
 

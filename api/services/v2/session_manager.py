@@ -182,8 +182,8 @@ class SessionManager:
         # 1. 检查现有会话（快速路径）
         if session_id in self._sessions:
             ctx = self._sessions[session_id]
-            # 检查配置是否更新
-            if ctx.config_hash == config_hash:
+            # 检查配置是否更新（config_hash 为空视为强制更新）
+            if config_hash and ctx.config_hash == config_hash:
                 ctx.touch()
                 return ctx
             # 配置更新，销毁旧 session
