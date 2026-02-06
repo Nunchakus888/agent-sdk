@@ -71,6 +71,7 @@ class SessionContext:
         config_hash: 配置哈希（用于检测配置更新）
         agent: WorkflowAgentV2 instance
         timer: Session-level Timer
+        config_parse_tokens: 配置解析消耗的 tokens（首次解析时有值，缓存命中时为 0）
     """
     session_id: str
     tenant_id: str
@@ -85,12 +86,19 @@ class SessionContext:
     # Timer (session-level)
     timer: Optional[SessionTimer] = None
 
+    # 配置解析消耗的 tokens（首次 LLM 解析时有值，缓存命中时为 0）
+    config_parse_tokens: int = 0
+
     # Metadata
     created_at: datetime = field(default_factory=utc_now)
     last_active_at: datetime = field(default_factory=utc_now)
 
     # Statistics
     query_count: int = 0
+
+    def set_request_context(self, **kwargs):
+        """inject request context（such as correlation_id），供 HTTP 工具占位符替换"""
+        self.agent.context_vars.update(kwargs)
 
     def touch(self):
         """Update the active time"""

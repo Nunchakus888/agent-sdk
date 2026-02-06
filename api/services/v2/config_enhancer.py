@@ -30,6 +30,13 @@ class EnhancedConfig(BaseModel):
     constraints: str = Field(default="", description="安全和边界约束")
 
 
+class EnhanceResult(BaseModel):
+    """增强结果，包含配置和 tokens 消耗"""
+
+    config: dict = Field(default_factory=dict, description="增强后的配置")
+    total_tokens: int = Field(default=0, description="LLM 消耗的 tokens")
+
+
 class ParseError(Exception):
     """解析错误，用于触发重试"""
     pass
@@ -123,7 +130,7 @@ class ConfigEnhancer:
         self._llm = llm
         self._max_retries = max_retries
 
-    async def enhance(self, raw_config: dict) -> dict:
+    async def enhance(self, raw_config: dict) -> EnhanceResult:
         """
         解析配置，支持自动重试
 
@@ -131,11 +138,12 @@ class ConfigEnhancer:
             raw_config: 原始配置
 
         Returns:
-            解析后的字段字典
+            EnhanceResult 包含解析后的字段和 tokens 消耗
         """
         prompt = self._build_prompt(raw_config)
         last_response = ""
         last_error = ""
+        total_tokens = 0
 
         for attempt in range(self._max_retries + 1):
             try:
@@ -155,9 +163,16 @@ class ConfigEnhancer:
                 response_text = response.content or ""
                 last_response = response_text
 
+                # 累加 tokens
+                if response.usage:
+                    total_tokens += response.usage.total_tokens
+
                 enhanced = self._parse_response(response_text)
-                logger.info(f"Config parsing completed:\n {enhanced.model_dump()}")
-                return enhanced.model_dump()
+                logger.info(f"Config parsing completed: tokens={total_tokens}")
+                return EnhanceResult(
+                    config=enhanced.model_dump(),
+                    total_tokens=total_tokens,
+                )
 
             except ParseError as e:
                 last_error = str(e)
@@ -170,7 +185,10 @@ class ConfigEnhancer:
 
         # 所有重试失败，返回 fallback
         logger.warning("All parse attempts failed, using fallback config")
-        return self._create_fallback(raw_config).model_dump()
+        return EnhanceResult(
+            config=self._create_fallback(raw_config).model_dump(),
+            total_tokens=total_tokens,
+        )
 
     def _build_prompt(self, raw_config: dict) -> str:
         """构建 LLM prompt"""

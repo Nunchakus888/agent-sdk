@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 
 from api.core.correlation import get_correlation_id
 from api.core.logging import get_logger, LogContext
+from api.services.cancellable_tasks import CancellableTaskService
 from api.services.v2 import EventCollector, QueryRecorder
 from api.services.callback import (
     CallbackService,
@@ -152,62 +153,8 @@ class ChatAsyncResponse(BaseModel):
     session_id: str = Field(..., description="会话ID")
 
 
-# =============================================================================
-# 任务管理器（会话级取消）
-# =============================================================================
-
-
-@dataclass
-class PendingTask:
-    """待处理任务"""
-    task: asyncio.Task
-    correlation_id: str
-    session_id: str
-    created_at: float = field(default_factory=time.time)
-
-
-class ChatTaskManager:
-    """
-    Chat 任务管理器
-
-    功能：
-    - 管理每个 session 的待处理任务
-    - 新请求自动取消同 session 的旧请求
-    - 线程安全
-    """
-
-    def __init__(self):
-        self._tasks: dict[str, PendingTask] = {}
-        self._lock = asyncio.Lock()
-
-    async def register(
-        self, session_id: str, correlation_id: str, task: asyncio.Task
-    ) -> Optional[PendingTask]:
-        """注册新任务，返回被取消的旧任务（如果有）"""
-        async with self._lock:
-            old_task = self._tasks.get(session_id)
-            self._tasks[session_id] = PendingTask(
-                task=task,
-                correlation_id=correlation_id,
-                session_id=session_id,
-            )
-            if old_task and not old_task.task.done():
-                old_task.task.cancel()
-                return old_task
-            return None
-
-    async def unregister(self, session_id: str) -> None:
-        """注销任务"""
-        async with self._lock:
-            self._tasks.pop(session_id, None)
-
-    def get(self, session_id: str) -> Optional[PendingTask]:
-        """获取任务"""
-        return self._tasks.get(session_id)
-
-
-# 全局任务管理器
-_task_manager = ChatTaskManager()
+# 全局任务服务
+_tasks = CancellableTaskService()
 
 
 # =============================================================================
@@ -255,29 +202,59 @@ def create_router() -> APIRouter:
             tenant_id=request.tenant_id,
         ):
             async def process_chat():
-                """background processing task"""
+                """
+                后台处理任务
+
+                分为两个阶段：
+                1. Session 初始化阶段（不可取消）：创建 session、发送 greeting
+                2. AI 交互阶段（可取消）：执行查询、发送回调
+                """
                 nonlocal start_time
+                greeting_tokens = 0
+
                 try:
-                    # 获取或创建会话（返回是否为新会话）
+                    # ========================================
+                    # 阶段 1: Session 初始化（不可取消）
+                    # ========================================
                     is_new_session = not session_manager.exists(request.session_id)
 
+                    # 获取或创建会话（可能触发 LLM 配置解析）
                     ctx = await session_manager.get_or_create(request.to_config_request())
 
-                    # 新会话且配置了问候语，先发送问候消息
+                    # 获取配置解析消耗的 tokens（首次解析时有值，缓存命中时为 0）
+                    greeting_tokens = ctx.config_parse_tokens
+
+                    ctx.set_request_context(correlation_id=correlation_id)
+
+                    # 新会话且配置了问候语，发送问候消息
                     if is_new_session and ctx.agent.config.need_greeting:
                         greeting_duration = time.time() - start_time
+                        greeting_msg = ctx.agent.config.need_greeting
                         await callback_service.send_greeting(
                             correlation_id=correlation_id,
                             session_id=request.session_id,
-                            greeting_message=ctx.agent.config.need_greeting,
+                            greeting_message=greeting_msg,
                             duration=greeting_duration,
-                        )
-                        logger.info(
-                            f"✅ Greeting sent: {request.session_id}, "
-                            f"duration={greeting_duration:.3f}s"
+                            total_tokens=greeting_tokens,
                         )
 
-                    # 创建事件收集器
+                        # 复用 QueryRecorder 写入 greeting 到 messages 表
+                        if repos:
+                            greeting_collector = EventCollector(
+                                correlation_id=correlation_id,
+                                session_id=request.session_id,
+                                final_response=greeting_msg,
+                            )
+                            QueryRecorder(repos).record_async(greeting_collector)
+
+                        logger.info(
+                            f"✅ Greeting sent: {request.session_id}, "
+                            f"tokens={greeting_tokens}, duration={greeting_duration:.3f}s"
+                        )
+
+                    # ========================================
+                    # 阶段 2: AI 交互（可取消）
+                    # ========================================
                     collector = EventCollector(
                         correlation_id=correlation_id,
                         session_id=request.session_id,
@@ -296,6 +273,12 @@ def create_router() -> APIRouter:
 
                     # 获取 usage
                     usage = await ctx.agent.get_usage()
+                    current_tokens = usage.total_tokens if usage else 0
+
+                    # 记录 tokens 并获取总数（含被取消任务的累计）
+                    _tasks.set_tokens(request.session_id, current_tokens)
+                    total_tokens = _tasks.total_tokens(request.session_id)
+
                     ctx.increment_query()
                     session_manager.reset_timer(request.session_id)
 
@@ -307,6 +290,11 @@ def create_router() -> APIRouter:
                         )
                         return
 
+                    # 记录 messages / usages
+                    if repos:
+                        recorder = QueryRecorder(repos)
+                        await recorder.record(collector, usage)
+
                     # 发送成功回调
                     duration = time.time() - start_time
                     await callback_service.send_success(
@@ -314,19 +302,13 @@ def create_router() -> APIRouter:
                         session_id=request.session_id,
                         message=collector.final_response,
                         duration=duration,
-                        total_tokens=usage.total_tokens if usage else 0,
+                        total_tokens=total_tokens,
                     )
 
                     logger.info(
-                        f"Chat completed: {request.session_id}, "
-                        f"tokens={usage.total_tokens if usage else 0}, "
-                        f"duration={duration:.2f}s"
+                        f"📊 Chat completed: {request.session_id}, "
+                        f"tokens={total_tokens}, duration={duration:.2f}s"
                     )
-
-                    # 后台记录 messages / usages（与 V2 保持一致）
-                    if repos:
-                        recorder = QueryRecorder(repos)
-                        recorder.record_async(collector, usage)
 
                 except asyncio.CancelledError:
                     duration = time.time() - start_time
@@ -340,24 +322,11 @@ def create_router() -> APIRouter:
                     )
                     logger.error(f"Chat error: {e}", exc_info=True)
 
-                finally:
-                    await _task_manager.unregister(request.session_id)
+            # 启动任务（自动取消旧任务）
+            result = await _tasks.restart(process_chat(), tag=request.session_id)
 
-            # 创建后台任务
-            task = asyncio.create_task(process_chat())
-
-            # 注册任务（自动取消旧任务）
-            cancelled_task = await _task_manager.register(
-                session_id=request.session_id,
-                correlation_id=correlation_id,
-                task=task,
-            )
-
-            if cancelled_task:
-                logger.info(
-                    f"❌ Cancelled old task: {cancelled_task.correlation_id} "
-                    f"for session {request.session_id}"
-                )
+            if result.was_cancelled:
+                logger.info(f"❌ Cancelled old task for session {request.session_id}")
 
             return ChatAsyncResponse(
                 status=202,

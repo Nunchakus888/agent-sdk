@@ -45,6 +45,22 @@ class AgentConfigRequest:
     action_book_id: Optional[str] = None
     extra_param: Optional[Dict[str, Any]] = None
     
+    def to_context_vars(self) -> Dict[str, str]:
+        """
+        构建 context_vars（用于 HTTP 工具的占位符替换）
+
+        同时提供 camelCase 和 snake_case 两种风格的 key，
+        以兼容不同调用方的占位符约定。
+        """
+        return {
+            "tenantId": self.tenant_id,
+            "chatbotId": self.chatbot_id,
+            "sessionId": self.session_id,
+            "tenant_id": self.tenant_id,
+            "chatbot_id": self.chatbot_id,
+            "session_id": self.session_id,
+        }
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'AgentConfigRequest':
         """从字典创建 AgentConfigRequest 实例"""

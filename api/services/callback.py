@@ -109,23 +109,47 @@ class CallbackService:
             logger.warning("CHAT_CALLBACK_HOST not configured, skip callback")
             return False
 
+        request_body = payload.model_dump(mode="json")
+        url = self.callback_url
+
+        # 请求日志：简洁格式
+        data = payload.data
+        req_summary = (
+            f"[{payload.correlation_id[:11]}] "
+            f"code={payload.code}, "
+            f"msg={payload.message}, "
+            f"dur={payload.duration:.2f}s"
+        )
+        if data:
+            req_summary += f", kind={data.kind}, tokens={data.total_tokens}"
+        logger.info(f"📤 Callback REQ: {req_summary}")
+        logger.debug(f"Callback REQ body: {request_body}")
+
         try:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 resp = await client.post(
-                    self.callback_url,
-                    json=payload.model_dump(mode="json"),
+                    url,
+                    json=request_body,
                     headers={"Content-Type": "application/json"},
                 )
+                # 响应日志
                 if resp.status_code == 200:
-                    logger.info(f"Callback sent: {payload.correlation_id}")
+                    logger.info(
+                        f"✅ Callback RESP: [{payload.correlation_id[:11]}] "
+                        f"status=200 OK"
+                    )
                     return True
                 else:
+                    resp_text = resp.text[:200] if resp.text else ""
                     logger.warning(
-                        f"Callback failed: {resp.status_code}, {payload.correlation_id}"
+                        f"⚠️ Callback RESP: [{payload.correlation_id[:11]}] "
+                        f"status={resp.status_code}, body={resp_text}"
                     )
                     return False
         except Exception as e:
-            logger.error(f"Callback error: {e}, {payload.correlation_id}")
+            logger.error(
+                f"❌ Callback ERROR: [{payload.correlation_id[:11]}] {type(e).__name__}: {e}"
+            )
             return False
 
     async def send_success(
@@ -161,6 +185,7 @@ class CallbackService:
         session_id: str,
         greeting_message: str,
         duration: float = 0.0,
+        total_tokens: int = 0,
     ) -> bool:
         """
         发送问候消息回调
@@ -170,6 +195,7 @@ class CallbackService:
             session_id: 会话ID
             greeting_message: 问候消息内容
             duration: 处理耗时
+            total_tokens: 配置解析消耗的 tokens（首次解析时有值，缓存命中时为 0）
         """
         return await self.send(CallbackPayload(
             status=200,
@@ -179,10 +205,10 @@ class CallbackService:
             correlation_id=correlation_id,
             data=CallbackData(
                 source="ai_agent",
-                kind="greeting",
+                kind="message",  # 使用 message 类型，后端 AiAgentEventKind 不支持 greeting
                 creation_utc=datetime.now(timezone.utc).isoformat(),
                 correlation_id=correlation_id,
-                total_tokens=0,
+                total_tokens=total_tokens,
                 session_id=session_id,
                 message=greeting_message,
             ),

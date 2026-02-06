@@ -8,8 +8,11 @@
 
 1. **异步处理**: 立即返回 202，后台处理
 2. **问候消息**: 新会话自动发送问候（如果配置了 `need_greeting`）
-3. **自动取消**: 同 session 新请求取消旧请求
+3. **智能取消**: 同 session 新请求仅在旧请求 message 写入 DB 后才取消
 4. **回调保证**: 每个请求保证收到回调
+5. **Tokens 累加**: 被取消任务的 tokens 消耗会累加到后续请求
+6. **详细日志**: Callback 请求/响应日志便于调试
+7. **Context 传递**: `correlation_id` 自动传递给 flow_executor 等工具
 
 ## 消息流程
 
@@ -138,6 +141,7 @@
 | 模块 | 路径 |
 |------|------|
 | Chat 路由 | `api/routers/v1/chat.py` |
+| 任务服务 | `api/services/cancellable_tasks.py` |
 | Callback 服务 | `api/services/callback.py` |
 | 测试 | `tests/test_v1_chat_api.py` |
 
@@ -229,4 +233,100 @@ await service.send_timeout("corr_123", duration=300.0)
 
 # 发送错误回调
 await service.send_error("corr_123", duration=1.0, error_message="Connection failed")
+```
+
+## 任务取消机制
+
+### 简洁设计
+
+任务取消由 `CancellableTaskService` 统一管理（详见 [cancellable-task-service.md](cancellable-task-service.md)）。新请求到来时，`restart()` 自动取消同 session 的旧任务，无需手动清理。
+
+```python
+# 任务流程
+新请求 → restart(tag=session_id) 自动取消旧任务
+       → Session 初始化
+       → AI 交互（可取消阶段）
+       → 发送回调
+       → collect() 自动清理已完成任务
+```
+
+### Tokens 累加统计
+
+被取消任务的 tokens 消耗会累加到后续请求的统计中：
+
+```
+请求1: 消耗 100 tokens → 被取消
+请求2: 消耗 50 tokens → 被取消
+请求3: 消耗 80 tokens → 成功
+       ↓
+回调返回 total_tokens = 100 + 50 + 80 = 230
+```
+
+## Greeting Tokens 统计
+
+Greeting 消息的 tokens 来自配置解析（LLM 增强）：
+
+- **首次解析**：调用 LLM 解析配置，生成 greeting 消息，消耗 tokens
+- **缓存命中**：从 DB 读取已解析的配置，tokens = 0
+
+```python
+# 首次会话（配置未缓存）
+greeting 回调: total_tokens = 配置解析消耗的 tokens
+
+# 后续会话（配置已缓存）
+greeting 回调: total_tokens = 0
+```
+
+## Callback 日志
+
+Callback 服务会记录详细的请求/响应日志：
+
+### 请求日志 (INFO)
+```
+Callback REQ: [corr_123xyz] code=0, msg=SUCCESS, dur=1.23s, kind=message, tokens=150
+```
+
+### 响应日志 (INFO/WARNING)
+```
+# 成功
+Callback RESP: [corr_123xyz] status=200 OK
+
+# 失败
+Callback RESP: [corr_123xyz] status=500, body=Internal Server Error
+```
+
+### 错误日志 (ERROR)
+```
+Callback ERROR: [corr_123xyz] TimeoutError: Connection timeout
+```
+
+## Context 变量传递
+
+`correlation_id` 会自动注入到 `context_vars`，供 HTTP 工具使用：
+
+```python
+# 自动注入的 context_vars
+{
+    "correlationId": "corr_123xyz::process",
+    "correlation_id": "corr_123xyz::process",
+    "tenantId": "tenant_456",
+    "chatbotId": "bot_123",
+    "sessionId": "sess_789",
+    # ... 其他变量
+}
+```
+
+在 flow_executor 等工具配置中可以使用：
+
+```json
+{
+  "name": "flow_executor",
+  "endpoint": {
+    "url": "{flow_url}",
+    "body": {
+      "flowId": "{flowId}",
+      "correlationId": "{{correlationId}}"
+    }
+  }
+}
 ```

@@ -194,11 +194,11 @@ class SessionManager:
         if len(self._sessions) >= self._max_sessions:
             await self._evict_oldest()
 
-        # 3. 加载配置
-        config = await self._load_config(request)
+        # 3. 加载配置（返回配置和 LLM 解析消耗的 tokens）
+        config, config_parse_tokens = await self._load_config(request)
 
         # 4. 并行执行：Agent 创建 + DB 操作
-        agent_task = self._create_agent(config)
+        agent_task = self._create_agent(config, request.to_context_vars())
 
         if self._repos:
             agent = await agent_task
@@ -219,26 +219,30 @@ class SessionManager:
             chatbot_id=request.chatbot_id,
             agent=agent,
             config_hash=config_hash,
+            config_parse_tokens=config_parse_tokens,
         )
 
         # 6. 初始化 Timer
         self._init_timer(ctx, config)
 
         self._sessions[session_id] = ctx
-        logger.info(f"Session created: {session_id}")
+        logger.info(f"Session created: {session_id}, config_tokens={config_parse_tokens}")
 
         return ctx
 
     async def _load_config(
         self,
         request: "AgentConfigRequest",
-    ) -> WorkflowConfigSchema:
+    ) -> tuple[WorkflowConfigSchema, int]:
         """
         加载配置（DB → HTTP）
 
         流程：
-        1. DB 命中且 hash 匹配 → 直接返回（access_count 自动 +1）
+        1. DB 命中且 hash 匹配 → 直接返回（access_count 自动 +1），tokens=0
         2. DB 未命中或 hash 不匹配 → HTTP 加载 → 解析 → 存储 DB → 返回
+
+        Returns:
+            tuple[WorkflowConfigSchema, int]: (配置, LLM 解析消耗的 tokens)
         """
         config_hash = request.md5_checksum or ""
 
@@ -249,7 +253,8 @@ class SessionManager:
             )
             if doc:
                 logger.debug(f"Config DB HIT: {request.chatbot_id}, hash={config_hash[:12]}")
-                return WorkflowConfigSchema(**doc.parsed_config)
+                # 缓存命中，tokens=0
+                return WorkflowConfigSchema(**doc.parsed_config), 0
 
         # DB 未命中或 hash 不匹配，从 HTTP 加载
         logger.info(f"Config DB MISS: chatbot={request.chatbot_id}, hash={config_hash[:12]}")
@@ -258,8 +263,13 @@ class SessionManager:
     async def _load_config_from_http(
         self,
         request: "AgentConfigRequest",
-    ) -> WorkflowConfigSchema:
-        """从 HTTP 加载配置并存储到 DB"""
+    ) -> tuple[WorkflowConfigSchema, int]:
+        """
+        从 HTTP 加载配置并存储到 DB
+
+        Returns:
+            tuple[WorkflowConfigSchema, int]: (配置, LLM 解析消耗的 tokens)
+        """
         from api.utils.config.http_config import HttpConfigLoader
 
         if self._http_loader is None:
@@ -268,7 +278,7 @@ class SessionManager:
         raw_config = await self._http_loader.load_config_from_http(request)
 
         config_hash = request.md5_checksum or ""
-        config = await self._parse_config(raw_config, config_hash)
+        config, parse_tokens = await self._parse_config(raw_config, config_hash)
 
         # 存储到 DB（解耦的独立操作）
         await self._save_config_to_db(
@@ -279,7 +289,7 @@ class SessionManager:
             parsed_config=config.model_dump(),
         )
 
-        return config
+        return config, parse_tokens
 
     async def _save_config_to_db(
         self,
@@ -314,8 +324,13 @@ class SessionManager:
 
     async def _parse_config(
         self, raw_config: dict, config_hash: str
-    ) -> WorkflowConfigSchema:
-        """解析配置"""
+    ) -> tuple[WorkflowConfigSchema, int]:
+        """
+        解析配置
+
+        Returns:
+            tuple[WorkflowConfigSchema, int]: (配置, LLM 解析消耗的 tokens)
+        """
         import os
 
         # 环境变量覆盖
@@ -327,7 +342,7 @@ class SessionManager:
         )
 
         # LLM 增强解析
-        llm_parsed = await self._llm_enhance(raw_config)
+        llm_parsed, parse_tokens = await self._llm_enhance(raw_config)
 
         # 合并配置
         final_config = {
@@ -341,10 +356,10 @@ class SessionManager:
 
         logger.info(
             f"Config parsed: hash={config_hash[:12]}, "
-            f"llm={self._enable_llm_parsing}"
+            f"llm={self._enable_llm_parsing}, tokens={parse_tokens}"
         )
 
-        return WorkflowConfigSchema(**final_config)
+        return WorkflowConfigSchema(**final_config), parse_tokens
 
     async def _llm_enhance(self, raw_config: dict) -> dict:
         """
@@ -359,9 +374,12 @@ class SessionManager:
         不处理（其他地方处理）：
         - tools: 固定配置
         - max_iterations: 环境变量
+
+        Returns:
+            tuple[dict, int]: (增强后的配置, tokens 消耗)
         """
         if not self._enable_llm_parsing:
-            return raw_config
+            return raw_config, 0
 
         try:
             from api.services.v2.config_enhancer import ConfigEnhancer
@@ -370,17 +388,17 @@ class SessionManager:
             enhancer = ConfigEnhancer(llm=llm)
 
             logger.info("Starting LLM config enhancement...")
-            enhanced = await enhancer.enhance(raw_config)
+            result = await enhancer.enhance(raw_config)
 
             # 合并：增强字段覆盖原始配置
-            result = {**raw_config, **enhanced}
+            merged = {**raw_config, **result.config}
 
-            logger.info("LLM config enhancement completed")
-            return result
+            logger.info(f"LLM config enhancement completed: tokens={result.total_tokens}")
+            return merged, result.total_tokens
 
         except Exception as e:
             logger.error(f"LLM enhancement failed: {e}, using original config")
-            return raw_config
+            return raw_config, 0
 
     async def _ensure_session_record(
         self,
@@ -420,11 +438,16 @@ class SessionManager:
 
     async def _create_agent(
         self,
-        config: WorkflowConfigSchema
+        config: WorkflowConfigSchema,
+        context_vars: dict | None = None,
     ) -> WorkflowAgentV2:
         """创建 Agent 实例"""
         llm = self._get_llm()
-        return WorkflowAgentV2(config=config, llm=llm)
+        return WorkflowAgentV2(
+            config=config,
+            llm=llm,
+            context_vars=context_vars or {},
+        )
 
     def _get_llm(self):
         """获取 LLM 实例"""
