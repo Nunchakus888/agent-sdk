@@ -234,11 +234,9 @@ When starting a new conversation, greet the user with:
                     + "\n".join(conditions)
                 )
 
-        # System Actions - 特殊系统行为
-        system_actions = getattr(self.config, 'system_actions', [])
-        if system_actions:
-            action_lines = [f"- {a}" for a in system_actions]
-            sections.append("### System Actions\n" + "\n".join(action_lines))
+        # System Actions - NOT included in prompt (system-only, executed in parallel)
+        # Variable substitution (e.g., {{$contact.nickname}}) is handled by
+        # SystemActionExecutor after LLM response.
 
         if sections:
             return "## Available Capabilities\n\n" + "\n\n".join(sections)

@@ -389,12 +389,29 @@ class MessageRepository(BaseRepository):
     消息 Repository (V2)
 
     简化设计：移除 MessageState, metadata
+    每条消息自动分配会话内单调递增的 offset
     """
 
     def __init__(self, db: Database | None):
         super().__init__(db)
         self._memory_store: dict[str, "MessageDocumentV2"] = {}
         self._session_index: dict[str, list[str]] = {}
+        self._session_offsets: dict[str, int] = {}  # memory 模式的 offset 计数器
+
+    async def _next_offset(self, session_id: str) -> int:
+        """分配会话内下一个 offset（原子递增）"""
+        if self.is_persistent:
+            from pymongo import ReturnDocument
+            result = await self._db.sessions.find_one_and_update(
+                {"_id": session_id},
+                {"$inc": {"event_count": 1}},
+                return_document=ReturnDocument.AFTER,
+            )
+            return (result["event_count"] - 1) if result else 0
+        else:
+            current = self._session_offsets.get(session_id, 0)
+            self._session_offsets[session_id] = current + 1
+            return current
 
     async def create(
         self,
@@ -404,25 +421,27 @@ class MessageRepository(BaseRepository):
         correlation_id: Optional[str] = None,
         message_id: Optional[str] = None,
     ) -> "MessageDocumentV2":
-        """创建消息"""
+        """创建消息（自动分配 offset）"""
         from api.models import MessageDocumentV2
 
         mid = message_id or generate_id()
+        offset = await self._next_offset(session_id)
         doc = MessageDocumentV2(
             message_id=mid,
             session_id=session_id,
             role=role,
             content=content,
             correlation_id=correlation_id,
+            offset=offset,
             created_at=utc_now(),
         )
 
         if self.is_persistent:
-            logger.info(f"MessageRepository.create: inserting to DB, session={session_id}, role={role}")
+            logger.info(f"MessageRepository.create: inserting to DB, session={session_id}, role={role}, offset={offset}")
             await self._db.messages.insert_one(doc.to_dict())
             logger.info(f"MessageRepository.create: inserted, message_id={mid}")
         else:
-            logger.info(f"MessageRepository.create: memory mode, session={session_id}, role={role}")
+            logger.info(f"MessageRepository.create: memory mode, session={session_id}, role={role}, offset={offset}")
             self._memory_store[mid] = doc
             if session_id not in self._session_index:
                 self._session_index[session_id] = []
@@ -435,17 +454,21 @@ class MessageRepository(BaseRepository):
         session_id: str,
         limit: int = 100,
         order: str = "asc",
+        min_offset: int = 0,
     ) -> list["MessageDocumentV2"]:
-        """按会话列出消息"""
+        """按会话列出消息，支持 offset 过滤"""
         from api.models import MessageDocumentV2
 
         sort_order = 1 if order == "asc" else -1
 
         if self.is_persistent:
+            query: dict = {"session_id": session_id}
+            if min_offset > 0:
+                query["offset"] = {"$gte": min_offset}
             cursor = (
                 self._db.messages
-                .find({"session_id": session_id})
-                .sort("created_at", sort_order)
+                .find(query)
+                .sort("offset", sort_order)
                 .limit(limit)
             )
             docs = await cursor.to_list(length=limit)
@@ -453,8 +476,9 @@ class MessageRepository(BaseRepository):
         else:
             ids = self._session_index.get(session_id, [])
             msgs = [self._memory_store[mid] for mid in ids if mid in self._memory_store]
-            msgs.sort(key=lambda x: x.created_at, reverse=(order == "desc"))
-            # todo
+            if min_offset > 0:
+                msgs = [m for m in msgs if m.offset >= min_offset]
+            msgs.sort(key=lambda x: x.offset, reverse=(order == "desc"))
             return msgs[:limit]
 
     async def count_by_session(self, session_id: str) -> int:
@@ -464,26 +488,17 @@ class MessageRepository(BaseRepository):
         return len(self._session_index.get(session_id, []))
 
     async def delete_from_offset(self, session_id: str, min_offset: int) -> int:
-        """删除会话中指定 offset 之后的消息（按 created_at 排序的索引位置）"""
+        """删除会话中 offset >= min_offset 的消息"""
         if self.is_persistent:
-            # 获取该会话所有消息，按 created_at 排序
-            cursor = (
-                self._db.messages
-                .find({"session_id": session_id})
-                .sort("created_at", 1)
-                .skip(min_offset)
-            )
-            docs = await cursor.to_list(length=1000)
-            if not docs:
-                return 0
-            ids = [doc["_id"] for doc in docs]
-            result = await self._db.messages.delete_many({"_id": {"$in": ids}})
+            result = await self._db.messages.delete_many({
+                "session_id": session_id,
+                "offset": {"$gte": min_offset},
+            })
             return result.deleted_count
         else:
             ids = self._session_index.get(session_id, [])
             msgs = [self._memory_store[mid] for mid in ids if mid in self._memory_store]
-            msgs.sort(key=lambda x: x.created_at)
-            to_delete = msgs[min_offset:]
+            to_delete = [m for m in msgs if m.offset >= min_offset]
             for msg in to_delete:
                 self._memory_store.pop(msg.message_id, None)
             self._session_index[session_id] = [

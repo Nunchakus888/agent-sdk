@@ -24,11 +24,15 @@ const API_PATH_MAP: Record<string, string> = {
  * 转换 API 路径
  */
 function mapApiPath(endpoint: string): string {
+	let bestMatch = '';
+	let bestMapped = '';
 	for (const [prefix, mapped] of Object.entries(API_PATH_MAP)) {
-		if (endpoint === prefix || endpoint.startsWith(`${prefix}/`)) {
-			return endpoint.replace(prefix, mapped);
+		if ((endpoint === prefix || endpoint.startsWith(`${prefix}/`)) && prefix.length > bestMatch.length) {
+			bestMatch = prefix;
+			bestMapped = mapped;
 		}
 	}
+	if (bestMatch) return endpoint.replace(bestMatch, bestMapped);
 	return endpoint;
 }
 

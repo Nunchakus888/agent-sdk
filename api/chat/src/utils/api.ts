@@ -17,12 +17,16 @@ const API_PATH_MAP: Record<string, string> = {
  *       "sessions/xxx/events" -> "v1/session/xxx/events"
  */
 const mapApiPath = (endpoint: string): string => {
-	// 检查是否匹配映射规则
+	// 匹配最长前缀，避免短前缀误匹配（如 sessions 优先于 sessions/chat_async）
+	let bestMatch = '';
+	let bestMapped = '';
 	for (const [prefix, mapped] of Object.entries(API_PATH_MAP)) {
-		if (endpoint === prefix || endpoint.startsWith(`${prefix}/`)) {
-			return endpoint.replace(prefix, mapped);
+		if ((endpoint === prefix || endpoint.startsWith(`${prefix}/`)) && prefix.length > bestMatch.length) {
+			bestMatch = prefix;
+			bestMapped = mapped;
 		}
 	}
+	if (bestMatch) return endpoint.replace(bestMatch, bestMapped);
 	return endpoint;
 };
 

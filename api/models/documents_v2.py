@@ -182,6 +182,7 @@ class MessageDocumentV2:
     role: str                                # "user" | "assistant"
     content: str                             # 消息内容
     correlation_id: Optional[str] = None     # 请求关联ID
+    offset: int = 0                          # 会话内单调递增序号
     created_at: datetime = field(default_factory=utc_now)
 
     def to_dict(self) -> dict:
@@ -191,6 +192,7 @@ class MessageDocumentV2:
             "role": self.role,
             "content": self.content,
             "correlation_id": self.correlation_id,
+            "offset": self.offset,
             "created_at": self.created_at,
         }
 
@@ -202,6 +204,7 @@ class MessageDocumentV2:
             role=data["role"],
             content=data["content"],
             correlation_id=data.get("correlation_id"),
+            offset=data.get("offset", 0),
             created_at=ensure_utc(data.get("created_at")) or utc_now(),
         )
 

@@ -31,6 +31,7 @@ from bu_agent_sdk.agent.compaction import CompactionConfig
 from bu_agent_sdk.agent.flow_matcher import FlowMatcher, FlowMatchResult
 from bu_agent_sdk.agent.knowledge_retriever import KnowledgeRetriever
 from bu_agent_sdk.agent.service import Agent, TaskComplete
+from bu_agent_sdk.agent.system_actions import SystemActionExecutor
 from bu_agent_sdk.llm.base import BaseChatModel, LLMProvider
 from bu_agent_sdk.llm.messages import AssistantMessage, UserMessage
 from bu_agent_sdk.prompts.builder import SystemPromptBuilder
@@ -102,6 +103,7 @@ class WorkflowAgentV2:
     _llm: BaseChatModel = field(default=None, repr=False)
     _agent: Agent = field(default=None, repr=False)
     _workflow_tools: list[Tool] = field(default_factory=list, repr=False)
+    _system_action_tools: dict[str, HttpTool] = field(default_factory=dict, repr=False)
     _system_prompt: str = field(default="", repr=False)
     _flow_matcher: FlowMatcher = field(default=None, repr=False)
     _knowledge_retriever: KnowledgeRetriever | None = field(default=None, repr=False)
@@ -113,6 +115,7 @@ class WorkflowAgentV2:
             self._llm = self.llm
 
         self._flow_matcher = FlowMatcher(flows=self.config.flows)
+        self._system_action_tools = self._build_system_action_tools()
         self._workflow_tools = self._build_workflow_tools()
         self._system_prompt = self._build_system_prompt()
 
@@ -135,6 +138,33 @@ class WorkflowAgentV2:
             require_done_tool=False,
         )
 
+    def _build_system_action_tools(self) -> dict[str, HttpTool]:
+        """Build system action tools (NOT registered with LLM).
+
+        These tools are executed in parallel with the main flow,
+        and their results are used for variable substitution.
+        """
+        if not self.config.system_actions or not self.config.tools:
+            return {}
+
+        system_action_names = set(self.config.system_actions)
+        tools: dict[str, HttpTool] = {}
+
+        for tool_config in self.config.tools:
+            tool_name = tool_config.get("name", "")
+            if tool_name in system_action_names:
+                tools[tool_name] = HttpTool(
+                    config=ToolConfig(**tool_config),
+                    context_vars=self.context_vars,
+                )
+
+        if tools:
+            logger.info(
+                f"System action tools built: {list(tools.keys())}"
+            )
+
+        return tools
+
     def _build_workflow_tools(self) -> list[Tool]:
         """Build workflow tools from config.
 
@@ -143,8 +173,13 @@ class WorkflowAgentV2:
         will be filled from context_vars at execution time.
 
         ActionBook executor is automatically added when action_books are configured.
+
+        Excludes:
+        - system_actions (executed separately, not for LLM)
+        - actionbook_executor from config (uses built-in instead)
         """
         tools: list[Tool] = []
+        system_action_names = set(self.config.system_actions or [])
 
         # ActionBook Executor - built-in tool, auto-registered when action_books configured
         if self.config.action_books:
@@ -156,11 +191,15 @@ class WorkflowAgentV2:
             )
 
         # HTTP Tools (skip actionbook_executor if in config, use built-in instead)
+        # Also skip system_actions (executed separately, not for LLM)
         if self.config.tools:
             for tool_config in self.config.tools:
                 tool_name = tool_config.get("name", "")
                 if tool_name == ACTIONBOOK_EXECUTOR_TOOL_NAME:
                     logger.debug("Skipping actionbook_executor from config, using built-in")
+                    continue
+                if tool_name in system_action_names:
+                    logger.debug(f"Skipping system action from LLM tools: {tool_name}")
                     continue
 
                 http_tool = HttpTool(
@@ -223,12 +262,18 @@ class WorkflowAgentV2:
         Process user message.
 
         Flow:
-        1. Retrieve knowledge (if configured)
-        2. Rebuild system prompt with KB content
-        3. Try keyword matching (fast, deterministic)
-        4. If matched, call flow_executor tool directly
-        5. If not matched, enter Agent loop (LLM may call flow_executor)
+        1. Start system actions in parallel (non-blocking)
+        2. Retrieve knowledge (if configured)
+        3. Rebuild system prompt with KB content
+        4. Try keyword matching (fast, deterministic)
+        5. If matched, call flow_executor tool directly
+        6. If not matched, enter Agent loop (LLM may call flow_executor)
+        7. Apply system action variable substitution to response
         """
+        # Step 0: Start system actions in parallel
+        system_executor = self._create_system_executor()
+        system_task = system_executor.start()
+
         # Step 1: Knowledge retrieval (non-blocking on failure)
         kb_content = await self._retrieve_knowledge(message, session_id)
 
@@ -242,7 +287,8 @@ class WorkflowAgentV2:
         if self._flow_matcher.has_keyword_flows:
             match_result = self._flow_matcher.match_keyword(message)
             if match_result.matched:
-                return await self._execute_keyword_flow(match_result)
+                result = await self._execute_keyword_flow(match_result)
+                return await system_executor.apply(result, system_task)
 
         # Step 4: Load context if provided
         if context:
@@ -258,9 +304,12 @@ class WorkflowAgentV2:
         self._log_prompt_context(message)
 
         try:
-            return await self._agent.query(message)
+            result = await self._agent.query(message)
         except TaskComplete as e:
-            return e.message
+            result = e.message
+
+        # Step 6: Apply system action variable substitution
+        return await system_executor.apply(result, system_task)
 
     async def _execute_keyword_flow(self, match_result: FlowMatchResult) -> str:
         """
@@ -296,9 +345,28 @@ class WorkflowAgentV2:
         )
 
     async def query_stream(self, message: str):
-        """Stream process user message."""
+        """Stream process user message with system action support.
+
+        System actions run in parallel. Variable substitution is applied
+        to the FinalResponseEvent content before yielding.
+        """
+        from bu_agent_sdk.agent.events import FinalResponseEvent
+
+        system_executor = self._create_system_executor()
+        system_task = system_executor.start()
+
         async for event in self._agent.query_stream(message):
-            yield event
+            if isinstance(event, FinalResponseEvent) and system_task:
+                substituted = await system_executor.apply(
+                    event.content, system_task
+                )
+                yield FinalResponseEvent(content=substituted)
+            else:
+                yield event
+
+    def _create_system_executor(self) -> SystemActionExecutor:
+        """Create a SystemActionExecutor for the current request."""
+        return SystemActionExecutor(action_tools=self._system_action_tools)
 
     async def get_usage(self) -> UsageSummary:
         """Get token usage statistics."""

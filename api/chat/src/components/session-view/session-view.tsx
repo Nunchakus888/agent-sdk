@@ -28,6 +28,8 @@ const SessionView = (): ReactElement => {
 	const submitButtonRef = useRef<HTMLButtonElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const messagesRef = useRef<HTMLDivElement>(null);
+	const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const pollRemainingRef = useRef(0);
 
 	const [message, setMessage] = useState('');
 	const [lastOffset, setLastOffset] = useState(0);
@@ -60,6 +62,16 @@ const SessionView = (): ReactElement => {
 		setMessages([]);
 		setShowTyping(false);
 		setShowLogsForMessage(null);
+		if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+		pollRemainingRef.current = 0;
+	};
+
+	// 按需轮询：仅在等待响应时轮询，空闲时停止
+	const schedulePoll = () => {
+		if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+		if (pollRemainingRef.current <= 0) return;
+		pollRemainingRef.current--;
+		pollTimerRef.current = setTimeout(() => refetch(), 3000);
 	};
 
 	const resendMessageDialog = (index: number) => (sessionId: string, text?: string) => {
@@ -125,11 +137,18 @@ const SessionView = (): ReactElement => {
 		if (session?.id === NEW_SESSION_ID) return;
 		const lastEvent = lastEvents?.at(-1);
 		const lastStatusEvent = lastEvents?.findLast((e) => e.kind === 'status');
-		if (!lastEvent) return;
+		if (!lastEvent) {
+			// 空响应也消耗一次轮询配额
+			schedulePoll();
+			return;
+		}
+
+		// 收到新事件，重置轮询配额（保持活跃轮询直到事件流结束）
+		pollRemainingRef.current = Math.max(pollRemainingRef.current, 5);
 
 		const offset = lastEvent?.offset;
-		// 只在有新消息时才更新 lastOffset，避免无限循环
-		if ((offset || offset === 0) && offset > lastOffset) {
+		// 收到新事件后推进 offset 游标，下次轮询从 offset+1 开始
+		if ((offset || offset === 0) && offset >= lastOffset) {
 			setLastOffset(offset + 1);
 		}
 
@@ -174,7 +193,8 @@ const SessionView = (): ReactElement => {
 
 			setShowTyping(lastStatusEventStatus === 'typing');
 		}
-		refetch();
+		// 收到事件后安排下一次轮询（倒计时递减，空闲时自动停止）
+		schedulePoll();
 	};
 
 	const scrollToLastMessage = () => {
@@ -212,6 +232,15 @@ const SessionView = (): ReactElement => {
 	useEffect(() => {
 		if (agents && agent?.id) setIsMissingAgent(!agents?.find((a) => a.id === agent?.id));
 	}, [agents, agent?.id]);
+
+	// 进入会话时给几次初始轮询，捕获可能正在进行的事件
+	useEffect(() => {
+		if (!session?.id || session?.id === NEW_SESSION_ID) return;
+		pollRemainingRef.current = 3;
+		return () => {
+			if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+		};
+	}, [session?.id]);
 
 	// Session creation now handled via /chat API in postMessage
 
@@ -300,19 +329,19 @@ const SessionView = (): ReactElement => {
 			const response: any = await postData('sessions/chat_async', chatRequest);
 			console.log('✅ Chat API response:', response);
 			
-			// Check for error response
-			if (response.status !== 200) {
+			// Check for error response (accept 2xx status codes)
+			if (response.status >= 400) {
 				const errorMsg = response.message || 'Chat request failed';
 				console.error('❌ Chat API error response:', response);
 				toast.error(`发送失败: ${errorMsg}`);
 				return;
 			}
-			
-			if (isNewSession && response.data?.session_id) {
+
+			if (isNewSession && response.session_id) {
 				// Update session with actual session_id from backend, preserve all config
 				const actualSession: SessionInterface = processSessionObject({
 					...session!,
-					id: response.data.session_id,
+					id: response.session_id,
 					// Preserve config for future messages
 					tenant_id: chatRequest.tenant_id,
 					chatbot_id: chatRequest.chatbot_id,
@@ -335,6 +364,8 @@ const SessionView = (): ReactElement => {
 			}
 			
 			soundDoubleBlip();
+			// 发送消息后启动轮询（最多 20 次 × 3s = 60s），等待 assistant 回复
+			pollRemainingRef.current = 20;
 			refetch();
 		} catch (err: any) {
 			console.error('❌ Chat API error:', err);

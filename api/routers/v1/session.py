@@ -132,12 +132,11 @@ def create_router() -> APIRouter:
             session_id=session_id,
             limit=1000,
             order="asc",
+            min_offset=min_offset,
         )
 
         events = []
-        for i, msg in enumerate(messages):
-            if i < min_offset:
-                continue
+        for msg in messages:
             source = "ai_agent" if msg.role == "assistant" else "customer"
             events.append({
                 "id": msg.message_id,
@@ -145,7 +144,7 @@ def create_router() -> APIRouter:
                 "kind": "message",
                 "correlation_id": msg.correlation_id or msg.message_id,
                 "serverStatus": "ready",
-                "offset": i,
+                "offset": msg.offset,
                 "creation_utc": msg.created_at.isoformat() if msg.created_at else "",
                 "data": {
                     "message": msg.content,
